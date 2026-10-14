@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Kalender</title>
+  <meta name="description" content="Schichten, Lohn, Abos und To-dos an einem Ort.">
+  <meta name="theme-color" content="#f4f3f1" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Kalender">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="src/app.js"></script>
+</head>
+<body>
+  <main id="app"></main>
+  <nav id="tabbar" class="tabbar" aria-label="Bereiche"></nav>
+  <div id="hinweis" class="hinweis" role="status" aria-live="polite"></div>
+  <dialog id="sheet" class="sheet"></dialog>
+  <noscript>Diese App braucht JavaScript.</noscript>
+</body>
+</html>
