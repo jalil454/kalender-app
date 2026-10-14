@@ -32,7 +32,7 @@ self.addEventListener("activate", (ereignis) => {
 
 self.addEventListener("fetch", (ereignis) => {
   const anfrage = ereignis.request;
-  // Claude-API und SDK-Download gehen direkt ins Netz und werden nie gespeichert.
+  // Anfragen an Gemini gehen direkt ins Netz und werden nie gespeichert.
   if (anfrage.method !== "GET" || new URL(anfrage.url).origin !== self.location.origin) return;
   ereignis.respondWith(
     fetch(anfrage)

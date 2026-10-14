@@ -1,9 +1,9 @@
-// Dienstplan-Foto lesen: Bild verkleinern, an Claude schicken, Antwort in Schichten übersetzen.
+// Dienstplan-Foto lesen: Bild verkleinern, an Google Gemini schicken, Antwort in Schichten übersetzen.
 import { istDatum, istZeit } from "./logic.js";
 
-// Offizielles Anthropic-SDK, erst beim Scannen aus dem Netz geladen. Version fest, damit sich nichts unbemerkt ändert.
-const SDK_URL = "https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@0.128.0/+esm";
-const MODELL = "claude-opus-5-5";
+// Gemini Interactions API; gemini-3.8-flash ist im kostenlosen Tarif enthalten.
+const ENDPUNKT = "https://generativelanguage.googleapis.com/v1beta/interactions";
+const MODELL = "gemini-3.8-flash";
 
 const SCHEMA = {
   type: "object",
@@ -72,57 +72,50 @@ export async function bildVorbereiten(datei, maxKante = 2000) {
 }
 
 export async function analysiereDienstplan({ apiKey, bild, name, heute, kuerzel, signal }) {
-  let Anthropic;
-  try {
-    ({ default: Anthropic } = await import(SDK_URL));
-  } catch {
-    throw new Error("Claude ist gerade nicht erreichbar. Bist du online?");
-  }
-  const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
   let antwort;
   try {
-    antwort = await client.beta.messages.create(
-      {
+    antwort = await fetch(ENDPUNKT, {
+      method: "POST",
+      // Key im Header statt in der URL, damit er in keinem Protokoll landet.
+      headers: { "x-goog-api-key": apiKey, "content-type": "application/json" },
+      body: JSON.stringify({
         model: MODELL,
-        max_tokens: 16000,
-        // Lehnt das Modell ab, versucht die API es automatisch mit dem empfohlenen Ersatzmodell.
-        betas: ["server-side-fallback-2026-07-01"],
-        fallbacks: "default",
-        output_config: { effort: "high", format: { type: "json_schema", schema: SCHEMA } },
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "image", source: { type: "base64", media_type: "image/jpeg", data: bild } },
-              { type: "text", text: anweisung(name, heute, kuerzel) },
-            ],
-          },
+        store: false, // Anfrage nicht für späteres Abrufen bei Google ablegen
+        input: [
+          { type: "image", data: bild, mime_type: "image/jpeg" },
+          { type: "text", text: anweisung(name, heute, kuerzel) },
         ],
-      },
-      { signal },
-    );
+        response_format: { type: "text", mime_type: "application/json", schema: SCHEMA },
+        generation_config: { thinking_level: "medium" },
+      }),
+      signal,
+    });
   } catch (fehler) {
-    throw new Error(fehlerText(Anthropic, fehler));
+    if (fehler.name === "AbortError") throw new Error("Abgebrochen.");
+    throw new Error("Keine Verbindung zu Gemini. Bist du online?");
   }
-  if (antwort.stop_reason === "refusal") throw new Error("Claude hat die Anfrage abgelehnt. Versuch es mit einem anderen Foto.");
-  if (antwort.stop_reason === "max_tokens") throw new Error("Die Antwort ist unvollständig. Versuch einen kleineren Ausschnitt.");
-  const block = antwort.content.find((b) => b.type === "text");
+  const daten = await antwort.json().catch(() => null);
+  if (!antwort.ok) throw new Error(fehlerText(antwort.status, daten?.error?.message ?? ""));
+  if (daten?.status !== "completed") throw new Error(`Gemini hat nicht fertig geantwortet (${daten?.status ?? "unbekannt"}). Versuch es noch einmal.`);
+  const text = (daten.steps ?? [])
+    .filter((schritt) => schritt.type === "model_output")
+    .flatMap((schritt) => schritt.content ?? [])
+    .filter((teil) => teil.type === "text")
+    .map((teil) => teil.text)
+    .join("");
   try {
-    return JSON.parse(block?.text ?? "");
+    return JSON.parse(text);
   } catch {
     throw new Error("Die Antwort konnte nicht gelesen werden.");
   }
 }
 
-function fehlerText(Anthropic, fehler) {
-  if (fehler instanceof Anthropic.APIUserAbortError) return "Abgebrochen.";
-  if (fehler instanceof Anthropic.AuthenticationError) return "Der API-Key ist ungültig.";
-  if (fehler instanceof Anthropic.PermissionDeniedError) return "Der API-Key darf dieses Modell nicht nutzen.";
-  if (fehler instanceof Anthropic.RateLimitError) return "Zu viele Anfragen. Warte kurz und versuch es noch einmal.";
-  if (fehler instanceof Anthropic.BadRequestError) return `Anfrage abgelehnt: ${fehler.message}`;
-  if (fehler instanceof Anthropic.APIConnectionError) return "Keine Verbindung zu Claude. Bist du online?";
-  if (fehler instanceof Anthropic.APIError) return `Fehler von Claude (${fehler.status ?? "?"}): ${fehler.message}`;
-  return fehler?.message ?? "Unbekannter Fehler.";
+function fehlerText(status, meldung) {
+  if (status === 400 && /api.?key/i.test(meldung)) return "Der API-Key ist ungültig.";
+  if (status === 401 || status === 403) return "Der API-Key ist ungültig oder darf Gemini nicht nutzen.";
+  if (status === 429) return "Das kostenlose Limit ist erreicht. Warte eine Minute und versuch es noch einmal.";
+  if (status >= 500) return "Gemini ist gerade gestört. Versuch es später noch einmal.";
+  return `Anfrage abgelehnt (${status}): ${meldung}`;
 }
 
 // Übersetzt die Antwort in Vorschläge. Nichts wird gespeichert, bevor ich es bestätige.
