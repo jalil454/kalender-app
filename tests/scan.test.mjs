@@ -1,7 +1,7 @@
 // G6: Antwort der Foto-Analyse wird in Schicht-Vorschläge übersetzt (ohne echten API-Aufruf).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { scanZuSchichten, jsonAusText, streifen, zweitmeinung } from "../src/scan.js";
+import { scanZuSchichten, jsonAusText, streifen, zweitmeinung, planAusMarkdown } from "../src/scan.js";
 
 const einstellungen = {
   standardPause: 30,
@@ -167,4 +167,78 @@ test("Zweitmeinung: schon eingetragene Schicht bleibt abgewählt, auch wenn beid
   const r = zweitmeinung(a, a, namen);
   assert.equal(r.eintraege[0].status, "doppelt");
   assert.equal(r.eintraege[0].auswahl, false);
+});
+
+// Tabellen wie aus der Texterkennung, im Format eines echten Personaleinsatzplans (Namen erfunden).
+const KOPF = "| Zeitraum 02.11.26 - 08.11.26 | Mo 02.11.26 /KW 45 | Di 03.11.26 /KW 45 | Mi 04.11.26 /KW 45 | Do 05.11.26 /KW 45 | Fr 06.11.26 /KW 45 | Sa 07.11.26 /KW 45 | So 08.11.26 /KW 45 |";
+const PLAN = [
+  "# Personaleinsatzplan Kasse",
+  "",
+  KOPF,
+  "| --- | --- | --- | --- | --- | --- | --- | --- |",
+  "| Muster, Anna | SC 10:30-19:01 0:45 | SC 10:30-19:01 0:45 | Abwesend | Abwesend | Abwesend | SC 07:50-18:01 0:45 | |",
+  "| Muster, Ben | Abwesend | Abwesend | KA 16:00-18:00 0:00 | Abwesend | KA 16:00-19:00 0:00 | BK 09:00-14:01 0:30 | |",
+  "| Beispiel, Cem | F | Abwesend | Schule | | | | |",
+].join("\n");
+
+test("Automatik: findet Datumszeile und eigene Zeile und zerlegt Zeit, Pause und Kürzel", () => {
+  const { antwort } = planAusMarkdown(PLAN, "Muster, Ben", "2026-10-15");
+  assert.equal(antwort.name_gefunden, true);
+  assert.equal(antwort.name_im_plan, "Muster, Ben");
+  assert.deepEqual(antwort.schichten.map((s) => [s.datum, s.kuerzel, s.beginn, s.ende, s.pause_min]), [
+    ["2026-11-04", "KA", "16:00", "18:00", 0],
+    ["2026-11-06", "KA", "16:00", "19:00", 0],
+    ["2026-11-07", "BK", "09:00", "14:01", 30],
+  ]);
+});
+
+test("Automatik: Ergebnis läuft durch die normale Vorschau (Pause 0:00 bleibt 0)", () => {
+  const r = scanZuSchichten(planAusMarkdown(PLAN, "Muster, Ben", "2026-10-15").antwort, einstellungen, []);
+  assert.deepEqual(r.eintraege.map((e) => [e.datum, e.beginn, e.ende, e.pause, e.status]), [
+    ["2026-11-04", "16:00", "18:00", 0, "ok"],
+    ["2026-11-06", "16:00", "19:00", 0, "ok"],
+    ["2026-11-07", "09:00", "14:01", 30, "ok"],
+  ]);
+});
+
+test("Automatik: Zeit und Pause in getrennten Spalten werden zusammengefasst", () => {
+  const plan = [
+    "| Zeitraum | Mo 02.11.26 | | Di 03.11.26 | | Mi 04.11.26 | |",
+    "| --- | --- | --- | --- | --- | --- | --- |",
+    "| Muster, Ben | KA 16:00-18:00 | 0:00 | Abwesend | | BK 09:00-14:01 | 0:30 |",
+  ].join("\n");
+  const { antwort } = planAusMarkdown(plan, "Muster, Ben", "2026-10-15");
+  assert.deepEqual(antwort.schichten.map((s) => [s.datum, s.beginn, s.ende, s.pause_min]), [
+    ["2026-11-02", "16:00", "18:00", 0],
+    ["2026-11-04", "09:00", "14:01", 30],
+  ]);
+});
+
+test("Automatik: nur der Nachname bei zwei gleichen Nachnamen ist nicht eindeutig", () => {
+  const r = planAusMarkdown(PLAN, "Muster", "2026-10-15");
+  assert.equal(r.antwort, undefined);
+  assert.equal(r.eindeutig, false);
+  assert.match(r.grund, /2 Zeilen/);
+});
+
+test("Automatik: unbekannter Name und Foto ohne Tabelle werden begründet abgelehnt", () => {
+  assert.match(planAusMarkdown(PLAN, "Niemand, Nora", "2026-10-15").grund, /steht nicht in der erkannten Tabelle/);
+  assert.match(planAusMarkdown("Nur Text, keine Tabelle", "Muster, Ben", "2026-10-15").grund, /Keine Datumszeile/);
+});
+
+test("Automatik: Umlaute, Kürzel ohne Zeit und unbekannter Text", () => {
+  const plan = KOPF + "\n| --- |\n| Müller, Jörg | F | Berufsschule | | | | | |";
+  const { antwort } = planAusMarkdown(plan, "Muller, Jorg", "2026-10-15");
+  assert.deepEqual(antwort.schichten.map((s) => [s.datum, s.kuerzel, s.beginn, s.roh]), [
+    ["2026-11-02", "F", "", "F"],
+    ["2026-11-03", "", "", "Berufsschule"],
+  ]);
+  const r = scanZuSchichten(antwort, einstellungen, []);
+  assert.deepEqual(r.eintraege.map((e) => [e.beginn, e.status]), [["06:00", "ok"], ["", "unklar"]]);
+});
+
+test("Automatik: Datum ohne Jahr bekommt das Jahr, das am nächsten an heute liegt", () => {
+  const plan = "| Name | Mo 28.12. | Di 29.12. | Fr 01.01. |\n| --- |\n| Muster, Ben | 08:00-12:00 | 08:00-12:00 | 08:00-12:00 |";
+  const { antwort } = planAusMarkdown(plan, "Muster, Ben", "2026-12-20");
+  assert.deepEqual(antwort.schichten.map((s) => s.datum), ["2026-12-28", "2026-12-29", "2027-01-01"]);
 });

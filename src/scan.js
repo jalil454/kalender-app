@@ -189,6 +189,159 @@ export async function analysiereDienstplan({ anbieter = "groq", apiKey, bild, na
   return jsonAusText(Array.isArray(inhalt) ? inhalt.filter((t) => t.type === "text").map((t) => t.text).join("") : inhalt ?? "");
 }
 
+// ---------- Automatik: Mistral OCR liest das ganze Foto als Tabelle ----------
+
+// Dreht und verkleinert das Foto für die Texterkennung (Drehung im Uhrzeigersinn, 0/90/270).
+export function bildAlsJpeg(bild, drehung = 0, maxKante = 2400) {
+  const faktor = Math.min(1, maxKante / Math.max(bild.naturalWidth, bild.naturalHeight));
+  const breite = Math.round(bild.naturalWidth * faktor);
+  const hoehe = Math.round(bild.naturalHeight * faktor);
+  const quer = drehung % 180 !== 0;
+  const leinwand = document.createElement("canvas");
+  leinwand.width = quer ? hoehe : breite;
+  leinwand.height = quer ? breite : hoehe;
+  const ctx = leinwand.getContext("2d");
+  ctx.translate(leinwand.width / 2, leinwand.height / 2);
+  ctx.rotate((drehung * Math.PI) / 180);
+  ctx.drawImage(bild, -breite / 2, -hoehe / 2, breite, hoehe);
+  return leinwand.toDataURL("image/jpeg", 0.9).split(",")[1];
+}
+
+export async function ocrLesen({ apiKey, base64, signal }) {
+  let antwort;
+  try {
+    antwort = await fetch("https://api.mistral.ai/v1/ocr", {
+      method: "POST",
+      headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+      // Ohne table_format stehen Tabellen direkt als Markdown im Text.
+      body: JSON.stringify({ model: "mistral-ocr-latest", document: { type: "image_url", image_url: `data:image/jpeg;base64,${base64}` } }),
+      signal,
+    });
+  } catch (fehler) {
+    if (fehler.name === "AbortError") throw new Error("Abgebrochen.");
+    throw new Error("Keine Verbindung zu Mistral.");
+  }
+  const daten = await antwort.json().catch(() => null);
+  const meldung = daten?.error?.message ?? daten?.message ?? (typeof daten?.detail === "string" ? daten.detail : "");
+  if (!antwort.ok) throw new Error(fehlerText("Mistral OCR", antwort.status, meldung));
+  return (daten?.pages ?? []).map((seite) => seite.markdown ?? "").join("\n\n");
+}
+
+// Versucht das Foto in drei Lagen; die erste, in der Datumszeile und Name gefunden werden, gilt.
+export async function automatik({ apiKey, bild, name, heute, signal }) {
+  let grund = "Keine Tabelle erkannt.";
+  for (const drehung of [0, 270, 90]) {
+    const ergebnis = planAusMarkdown(await ocrLesen({ apiKey, base64: bildAlsJpeg(bild, drehung), signal }), name, heute);
+    if (ergebnis.antwort) return ergebnis.antwort;
+    grund = ergebnis.grund;
+    if (ergebnis.eindeutig === false) break; // Drehen hilft nicht, wenn der Name mehrfach vorkommt
+  }
+  throw new Error(grund);
+}
+
+const zweistellig = (n) => String(n).padStart(2, "0");
+const DATUM = /(\d{1,2})\.(\d{1,2})\.(\d{4}|\d{2})?/g;
+
+function zellenVon(zeile) {
+  let t = zeile.trim();
+  if (t.startsWith("|")) t = t.slice(1);
+  if (t.endsWith("|")) t = t.slice(0, -1);
+  return t.split("|").map((z) => z.trim());
+}
+
+const istTrenner = (zellen) => zellen.every((z) => z === "" || /^:?-{2,}:?$/.test(z));
+const woerter = (text) =>
+  text
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .split(/[^a-z0-9ß]+/)
+    .filter(Boolean);
+
+// Ein Datum aus einer Kopfzelle; fehlt das Jahr, das Jahr, das am nächsten an heute liegt.
+function datumAusKopf(text, heute) {
+  const treffer = [...text.matchAll(DATUM)];
+  if (treffer.length !== 1) return null; // „02.11.26 - 08.11.26“ ist ein Zeitraum, keine Tagesspalte
+  const [, t, m, j] = treffer[0];
+  let jahr = j ? (j.length === 2 ? 2000 + Number(j) : Number(j)) : Number(heute.slice(0, 4));
+  if (!j) {
+    const kandidaten = [jahr - 1, jahr, jahr + 1].map((y) => `${y}-${zweistellig(m)}-${zweistellig(t)}`);
+    const abstand = (d) => Math.abs(new Date(d) - new Date(heute));
+    return kandidaten.filter(istDatum).sort((a, b) => abstand(a) - abstand(b))[0] ?? null;
+  }
+  const datum = `${jahr}-${zweistellig(m)}-${zweistellig(t)}`;
+  return istDatum(datum) ? datum : null;
+}
+
+const FREI = /^(abwesend|frei|urlaub|krank|feiertag|x|-+|–|—)$/i;
+
+function zelleLesen(text) {
+  const t = text.replace(/\s+/g, " ").trim();
+  if (!t || FREI.test(t)) return null;
+  const zeit = /(\d{1,2})[:.](\d{2})\s*[-–—]\s*(\d{1,2})[:.](\d{2})/.exec(t);
+  if (zeit) {
+    const pause = /(\d{1,2}):(\d{2})/.exec(t.slice(zeit.index + zeit[0].length));
+    return {
+      beginn: `${zweistellig(zeit[1])}:${zeit[2]}`,
+      ende: `${zweistellig(zeit[3])}:${zeit[4]}`,
+      pause_min: pause ? Number(pause[1]) * 60 + Number(pause[2]) : -1,
+      kuerzel: t.slice(0, zeit.index).trim(),
+      roh: t,
+    };
+  }
+  // Nur ein Kürzel wie „F“: Zeiten kommen aus den Einstellungen, sonst wird der Eintrag als unklar gezeigt.
+  return { beginn: "", ende: "", pause_min: -1, kuerzel: /^[\p{L}]{1,4}$/u.test(t) ? t : "", roh: t };
+}
+
+// Findet in den Markdown-Tabellen die Datumszeile und die Zeile mit meinem Namen.
+// Ergebnis im selben Format wie die Antwort der Bild-Modelle, damit scanZuSchichten es weiterverarbeitet.
+export function planAusMarkdown(markdown, name, heute) {
+  const tabellen = [];
+  let aktuell = null;
+  for (const zeile of markdown.split("\n")) {
+    if (zeile.trim().startsWith("|")) {
+      const zellen = zellenVon(zeile);
+      if (istTrenner(zellen)) continue;
+      if (!aktuell) {
+        aktuell = [];
+        tabellen.push(aktuell);
+      }
+      aktuell.push(zellen);
+    } else {
+      aktuell = null;
+    }
+  }
+  const gesucht = woerter(name);
+  if (!gesucht.length) return { grund: "Kein Name eingetragen." };
+  let grund = "Keine Datumszeile erkannt.";
+  for (const tabelle of tabellen) {
+    const kopfIndex = tabelle.findIndex((zellen) => zellen.filter((z) => datumAusKopf(z, heute)).length >= 3);
+    if (kopfIndex < 0) continue;
+    const spalten = tabelle[kopfIndex].map((z, i) => ({ i, datum: datumAusKopf(z, heute) })).filter((s) => s.datum);
+    const ersteSpalte = spalten[0].i;
+    const passend = tabelle.filter((zellen, i) => {
+      if (i === kopfIndex) return false;
+      const vorne = woerter(zellen.slice(0, ersteSpalte).join(" "));
+      return gesucht.every((w) => vorne.includes(w));
+    });
+    if (passend.length > 1) return { grund: `Der Name passt auf ${passend.length} Zeilen. Trag ihn vollständig ein, z. B. „Nachname, Vorname“.`, eindeutig: false };
+    if (!passend.length) {
+      grund = "Dein Name steht nicht in der erkannten Tabelle.";
+      continue;
+    }
+    const zeile = passend[0];
+    const schichten = [];
+    spalten.forEach((spalte, n) => {
+      // Teilt die Texterkennung Zeit und Pause auf zwei Spalten auf, gehören beide zum Tag davor.
+      const bis = n + 1 < spalten.length ? spalten[n + 1].i : zeile.length;
+      const inhalt = zelleLesen(zeile.slice(spalte.i, bis).join(" "));
+      if (inhalt) schichten.push({ datum: spalte.datum, ...inhalt });
+    });
+    return { antwort: { name_gefunden: true, name_im_plan: zeile.slice(0, ersteSpalte).filter(Boolean).join(" "), hinweis: "", schichten } };
+  }
+  return { grund };
+}
+
 // Holt das JSON-Objekt aus der Antwort, auch wenn es in einem Codeblock oder hinter Denktext steht.
 export function jsonAusText(text) {
   const ohneDenken = text.replace(/<think>[\s\S]*?<\/think>/g, "");
@@ -206,6 +359,7 @@ export function jsonAusText(text) {
 function fehlerText(name, status, meldung) {
   if (status === 401) return `Der ${name}-Key ist ungültig.`;
   if (status === 403) return `Der ${name}-Key darf dieses Modell nicht nutzen.`;
+  if (status === 402) return `${name} ist in deinem Tarif nicht enthalten.`;
   if (status === 413) return "Das Foto ist zu groß.";
   if (status === 429) return `Das kostenlose Limit bei ${name} ist erreicht. Warte etwas und versuch es noch einmal.`;
   if (status >= 500) return `${name} ist gerade gestört. Versuch es später noch einmal.`;

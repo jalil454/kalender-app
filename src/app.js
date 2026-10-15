@@ -1,7 +1,7 @@
 // Oberfläche der Kalender-App: zeichnet die Ansichten und verarbeitet Eingaben.
 import * as L from "./logic.js";
 import { laden, speichern, dauerhaftSpeichern } from "./store.js";
-import { analysiereDienstplan, ausschnittErstellen, ladeBild, scanZuSchichten, streifen, zweitmeinung } from "./scan.js";
+import { analysiereDienstplan, ausschnittErstellen, automatik, ladeBild, scanZuSchichten, streifen, zweitmeinung } from "./scan.js";
 
 let daten = laden();
 let heute = L.isoVon(new Date());
@@ -492,7 +492,7 @@ function sheetScan() {
     "Dienstplan scannen",
     `<div class="gruppe">${feld("Dein Name im Plan", `<input name="name" required maxlength="60" placeholder="z. B. Müller" autocomplete="off" value="${esc(e.name)}">`)}</div>
     <label class="foto-wahl"><input type="file" name="foto" accept="image/*" required><span data-foto-name>Foto auswählen oder aufnehmen</span></label>
-    <p class="fussnote">Danach tippst du im Foto auf deinen Namen, auf das Ende deiner Zeile und auf die Datumszeile. Nur dieser Ausschnitt geht an Groq. In die App kommt erst etwas, wenn du die Vorschläge bestätigst.</p>
+    <p class="fussnote">${e.apiKey2 ? "Zuerst versucht Mistral, den ganzen Plan automatisch zu lesen. Klappt das nicht, tippst du" : "Danach tippst du"} im Foto auf deinen Namen, auf das Ende deiner Zeile und auf die Datumszeile; dann geht nur dieser Ausschnitt an Groq. In die App kommt erst etwas, wenn du die Vorschläge bestätigst.</p>
     ${e.stundenlohn ? "" : '<p class="fussnote achtung">Noch kein Stundenlohn eingetragen: übernommene Schichten hätten 0 € Lohn.</p>'}
     <button type="submit" class="knopf">Weiter</button>`,
     { form: "scan", knopf: "" },
@@ -518,11 +518,32 @@ async function scanStarten(f) {
     return ungueltig(f.elements.foto, "Das Foto konnte nicht geöffnet werden. Versuch es als JPG oder PNG.");
   }
   scan = { abbruch: null, ergebnis: null, url, bild, punkte: [], ausschnitt: null };
+  const e = daten.einstellungen;
+  if (!e.apiKey2) return zeigeMarkieren(f);
+  // Automatik: Mistral OCR liest das ganze Foto, die App sucht Datumszeile und Namen selbst.
+  const abbruch = new AbortController();
+  scan.abbruch = abbruch;
+  $sheet.querySelector(".sheet-inhalt").innerHTML = `<div class="laden" role="status"><span class="kreis" aria-hidden="true"></span><p>Mistral liest den ganzen Plan …</p><p class="fussnote">Klappt das nicht, markierst du gleich selbst.</p></div>`;
+  try {
+    const antwort = await automatik({ apiKey: e.apiKey2, bild, name: e.name, heute, signal: abbruch.signal });
+    if (scan?.abbruch !== abbruch) return; // Sheet wurde inzwischen geschlossen
+    zeigeScanErgebnis(f, { ...scanZuSchichten(antwort, e, daten.schichten), automatik: true });
+  } catch (fehler) {
+    if (abbruch.signal.aborted || scan?.abbruch !== abbruch) return;
+    zeigeMarkieren(f, `Automatik hat nicht geklappt: ${fehler.message}`);
+  }
+}
+
+function zeigeMarkieren(f, notiz = "") {
+  scan.abbruch = null;
+  scan.punkte = [];
+  scan.ausschnitt = null;
   f.dataset.form = "scan-markieren";
   $sheet.querySelector(".sheet-inhalt").innerHTML = `
+    ${notiz ? `<p class="fussnote achtung">${esc(notiz)}</p>` : ""}
     <p class="schritt" data-schritt aria-live="polite">${MARKIER_TEXTE[0]}</p>
     <div class="zoom" role="group" aria-label="Vergrößerung">${[1, 2, 3].map((z) => `<button type="button" data-aktion="zoom" data-faktor="${z}" aria-pressed="${z === 2}">${z}×</button>`).join("")}</div>
-    <div class="foto-rahmen"><div class="foto-flaeche" data-foto-flaeche style="width: 200%"><img src="${url}" alt="Dienstplan-Foto, zum Markieren antippen" data-aktion="markieren"></div></div>
+    <div class="foto-rahmen"><div class="foto-flaeche" data-foto-flaeche style="width: 200%"><img src="${scan.url}" alt="Dienstplan-Foto, zum Markieren antippen" data-aktion="markieren"></div></div>
     <div data-ausschnitt hidden><p class="fussnote">Das geht an Groq:</p><img class="ausschnitt" alt="Ausschnitt mit Datumszeile und deiner Zeile"></div>
     <div class="knopf-reihe"><button type="button" class="knopf zweit" data-aktion="neu-markieren">Neu markieren</button><button type="submit" class="knopf" data-scan-senden disabled>Analysieren</button></div>`;
 }
@@ -597,7 +618,7 @@ function zeigeScanErgebnis(f, r) {
   const hinweis = (r.hinweis ? `<p class="fussnote">Hinweis: ${esc(r.hinweis)}</p>` : "") + (r.ausfall ? `<p class="fussnote achtung">${esc(r.ausfall)}</p>` : "");
   if (!r.nameGefunden || !r.eintraege.length) {
     const text = r.nameGefunden ? `Für „${esc(r.nameImPlan)}“ stehen keine Arbeitstage im Plan.` : "Dein Name wurde im Plan nicht eindeutig gefunden. Prüf die Schreibweise oder nimm ein schärferes Foto.";
-    inhalt.innerHTML = `<p class="sheet-text" role="alert">${text}</p>${hinweis}<button type="button" class="knopf" data-aktion="scan">Anderes Foto</button>`;
+    inhalt.innerHTML = `<p class="sheet-text" role="alert">${text}</p>${hinweis}${r.automatik ? '<button type="button" class="knopf zweit" data-aktion="selbst-markieren">Selbst markieren</button>' : ""}<button type="button" class="knopf" data-aktion="scan">Anderes Foto</button>`;
     return;
   }
   const zeilen = r.eintraege
@@ -621,11 +642,13 @@ function zeigeScanErgebnis(f, r) {
     })
     .join("");
   const anzahlUnsicher = r.eintraege.filter((e) => e.abweichung).length;
+  const herkunft = r.automatik ? " Automatisch aus der Tabelle gelesen (Mistral OCR)." : "";
   const vergleich = !("abweichung" in r.eintraege[0]) ? "" : anzahlUnsicher ? ` ${anzahlUnsicher === 1 ? "1 Eintrag ist" : `${anzahlUnsicher} Einträge sind`} unsicher, weil die beiden Modelle verschieden lesen.` : " Groq und Mistral lesen dasselbe.";
-  inhalt.innerHTML = `<p class="fussnote">Gefunden als „${esc(r.nameImPlan)}“.${vergleich} Prüf die Zeiten und wähl aus, was übernommen wird.</p>
+  inhalt.innerHTML = `<p class="fussnote">Gefunden als „${esc(r.nameImPlan)}“.${herkunft}${vergleich} Prüf die Zeiten und wähl aus, was übernommen wird.</p>
     <div class="gruppe abstand-oben">${zeilen}</div>
     ${hinweis}
-    <button type="submit" class="knopf" data-scan-knopf></button>`;
+    <button type="submit" class="knopf" data-scan-knopf></button>
+    ${r.automatik ? '<button type="button" class="knopf zweit" data-aktion="selbst-markieren">Stimmt nicht? Selbst markieren</button>' : ""}`;
   f.dataset.form = "scan-uebernehmen";
   zaehleAuswahl(f);
 }
@@ -767,6 +790,7 @@ const AKTIONEN = {
     $sheet.querySelector("[data-foto-flaeche]").style.width = `${Number(el.dataset.faktor) * 100}%`;
     $sheet.querySelectorAll('[data-aktion="zoom"]').forEach((k) => k.setAttribute("aria-pressed", String(k === el)));
   },
+  "selbst-markieren": () => zeigeMarkieren($sheet.querySelector("form")),
   "neu-markieren"() {
     scan.punkte = [];
     scan.ausschnitt = null;
