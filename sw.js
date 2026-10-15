@@ -1,6 +1,6 @@
 // Service Worker: hält die App-Dateien vor, damit die App auch offline startet.
 // Online wird immer zuerst die neueste Version geladen; der Speicher ist nur Ersatz.
-const CACHE = "kalender-v1";
+const CACHE = "kalender-v2";
 const DATEIEN = [
   "./",
   "index.html",
@@ -35,7 +35,9 @@ self.addEventListener("fetch", (ereignis) => {
   // Anfragen an Gemini gehen direkt ins Netz und werden nie gespeichert.
   if (anfrage.method !== "GET" || new URL(anfrage.url).origin !== self.location.origin) return;
   ereignis.respondWith(
-    fetch(anfrage)
+    // no-cache: beim Server nachfragen statt die 10 Minuten aus dem Browser-Cache zu nehmen,
+    // sonst laufen nach einem Update kurz alte und neue Dateien gemischt.
+    fetch(anfrage.url, { cache: "no-cache" })
       .then((antwort) => {
         if (antwort.ok) {
           const kopie = antwort.clone();
