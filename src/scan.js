@@ -1,9 +1,23 @@
-// Dienstplan-Foto lesen: Bild verkleinern, an Groq schicken, Antwort in Schichten übersetzen.
+// Dienstplan-Foto lesen: Ausschnitt an Groq (und optional OpenRouter) schicken, Antworten in Schichten übersetzen.
 import { istDatum, istZeit } from "./logic.js";
 
-// Groq (OpenAI-kompatibel), kostenloser Tarif; qwen3.8-27b ist dort das Modell, das Bilder liest.
-const ENDPUNKT = "https://api.groq.com/openai/v1/chat/completions";
-const MODELL = "qwen/qwen3.8-27b";
+// Beide Anbieter sind OpenAI-kompatibel und haben kostenlose Modelle, die Bilder lesen.
+// OpenRouter dient als Zweitmeinung, damit Lesefehler auffallen.
+export const ANBIETER = {
+  groq: {
+    name: "Groq",
+    endpunkt: "https://api.groq.com/openai/v1/chat/completions",
+    modell: "qwen/qwen3.8-27b",
+    // Versteckte Denkschritte zählen zum Ausgabe-Limit; bei "medium" wurde die Antwort abgeschnitten.
+    extra: { reasoning_format: "hidden", reasoning_effort: "low", max_completion_tokens: 16384 },
+  },
+  openrouter: {
+    name: "OpenRouter",
+    endpunkt: "https://openrouter.ai/api/v1/chat/completions",
+    modell: "google/gemma-4-31b-it:free",
+    extra: {},
+  },
+};
 
 const SCHEMA = {
   type: "object",
@@ -136,14 +150,15 @@ export function ausschnittErstellen(bild, [p1, p2, p3]) {
   return { url, base64: url.split(",")[1] };
 }
 
-export async function analysiereDienstplan({ apiKey, bild, name, heute, kuerzel, signal }) {
+export async function analysiereDienstplan({ anbieter = "groq", apiKey, bild, name, heute, kuerzel, signal }) {
+  const a = ANBIETER[anbieter];
   let antwort;
   try {
-    antwort = await fetch(ENDPUNKT, {
+    antwort = await fetch(a.endpunkt, {
       method: "POST",
       headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
       body: JSON.stringify({
-        model: MODELL,
+        model: a.modell,
         messages: [
           {
             role: "user",
@@ -154,22 +169,19 @@ export async function analysiereDienstplan({ apiKey, bild, name, heute, kuerzel,
           },
         ],
         // Kein JSON-Modus: Groq lehnt sonst bei kleinsten Abweichungen die ganze Antwort ab (400).
-        // jsonAusText liest das JSON tolerant aus. Die Denkschritte brauchen wir nicht.
-        reasoning_format: "hidden",
-        // Versteckte Denkschritte zählen zum Ausgabe-Limit; bei "medium" wurde die Antwort abgeschnitten.
-        reasoning_effort: "low",
-        max_completion_tokens: 16384, // Maximum dieses Modells
+        // jsonAusText liest das JSON tolerant aus.
+        ...a.extra,
       }),
       signal,
     });
   } catch (fehler) {
     if (fehler.name === "AbortError") throw new Error("Abgebrochen.");
-    throw new Error("Keine Verbindung zu Groq. Bist du online?");
+    throw new Error(`Keine Verbindung zu ${a.name}. Bist du online?`);
   }
   const daten = await antwort.json().catch(() => null);
-  if (!antwort.ok) throw new Error(fehlerText(antwort.status, daten?.error?.message ?? ""));
+  if (!antwort.ok) throw new Error(fehlerText(a.name, antwort.status, daten?.error?.message ?? ""));
   const wahl = daten?.choices?.[0];
-  if (wahl?.finish_reason === "length") throw new Error("Groq hat die Antwort abgebrochen, weil sie zu lang wurde. Versuch es noch einmal.");
+  if (wahl?.finish_reason === "length") throw new Error(`${a.name} hat die Antwort abgebrochen, weil sie zu lang wurde. Versuch es noch einmal.`);
   return jsonAusText(wahl?.message?.content ?? "");
 }
 
@@ -187,13 +199,14 @@ export function jsonAusText(text) {
   }
 }
 
-function fehlerText(status, meldung) {
-  if (status === 401) return "Der API-Key ist ungültig.";
-  if (status === 403) return "Der API-Key darf dieses Modell nicht nutzen (console.groq.com).";
+function fehlerText(name, status, meldung) {
+  if (status === 401) return `Der ${name}-Key ist ungültig.`;
+  if (status === 403) return `Der ${name}-Key darf dieses Modell nicht nutzen.`;
+  if (status === 404 && /data policy/i.test(meldung)) return "OpenRouter: In den Privacy-Einstellungen auf openrouter.ai musst du kostenlose Modelle freigeben.";
   if (status === 413) return "Das Foto ist zu groß.";
-  if (status === 429) return "Das kostenlose Limit ist erreicht. Warte eine Minute und versuch es noch einmal.";
-  if (status >= 500) return "Groq ist gerade gestört. Versuch es später noch einmal.";
-  return `Anfrage abgelehnt (${status}): ${meldung}`;
+  if (status === 429) return `Das kostenlose Limit bei ${name} ist erreicht. Warte etwas und versuch es noch einmal.`;
+  if (status >= 500) return `${name} ist gerade gestört. Versuch es später noch einmal.`;
+  return `${name} hat abgelehnt (${status}): ${meldung}`;
 }
 
 // Übersetzt die Antwort in Vorschläge. Nichts wird gespeichert, bevor ich es bestätige.
@@ -231,4 +244,32 @@ export function scanZuSchichten(antwort, einstellungen, vorhandene) {
     hinweis: antwort.hinweis ?? "",
     eintraege,
   };
+}
+
+// Vergleicht die Vorschläge zweier Modelle. Stimmen sie überein, bleibt alles wie es ist.
+// Weichen sie ab oder sieht nur eines eine Schicht, wird der Eintrag als unsicher markiert
+// und nicht vorausgewählt, damit ich selbst entscheide.
+export function zweitmeinung(a, b, [nameA, nameB]) {
+  const unsicher = (e, text) => ({ ...e, abweichung: text, auswahl: false });
+  const zeit = (e) => `${e.beginn || "?"}–${e.ende || "?"}, ${e.pause} min Pause`;
+  const hinweis = [a.hinweis && `${nameA}: ${a.hinweis}`, b.hinweis && `${nameB}: ${b.hinweis}`].filter(Boolean).join(" ");
+  if (!a.nameGefunden && !b.nameGefunden) return { ...a, hinweis };
+  if (!a.nameGefunden || !b.nameGefunden) {
+    const [gefunden, wer] = a.nameGefunden ? [a, nameA] : [b, nameB];
+    return { ...gefunden, hinweis, eintraege: gefunden.eintraege.map((e) => unsicher(e, `Nur ${wer} hat deinen Namen gefunden.`)) };
+  }
+  const proTag = (r) => r.eintraege.reduce((m, e) => m.set(e.datum, [...(m.get(e.datum) ?? []), e]), new Map());
+  const tageA = proTag(a);
+  const tageB = proTag(b);
+  const eintraege = [];
+  for (const datum of [...new Set([...tageA.keys(), ...tageB.keys()])].sort()) {
+    const ea = tageA.get(datum) ?? [];
+    const eb = tageB.get(datum) ?? [];
+    const gleich = ea.length === eb.length && ea.every((e, i) => e.beginn === eb[i].beginn && e.ende === eb[i].ende && e.pause === eb[i].pause);
+    if (gleich) eintraege.push(...ea.map((e) => ({ ...e, abweichung: "" })));
+    else if (!eb.length) eintraege.push(...ea.map((e) => unsicher(e, `Nur ${nameA} sieht hier eine Schicht.`)));
+    else if (!ea.length) eintraege.push(...eb.map((e) => unsicher(e, `Nur ${nameB} sieht hier eine Schicht.`)));
+    else eintraege.push(...ea.map((e) => unsicher(e, `${nameB} liest: ${eb.map(zeit).join(" / ")}`)));
+  }
+  return { ...a, hinweis, eintraege };
 }

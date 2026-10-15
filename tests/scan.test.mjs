@@ -1,7 +1,7 @@
 // G6: Antwort der Foto-Analyse wird in Schicht-Vorschläge übersetzt (ohne echten API-Aufruf).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { scanZuSchichten, jsonAusText, streifen } from "../src/scan.js";
+import { scanZuSchichten, jsonAusText, streifen, zweitmeinung } from "../src/scan.js";
 
 const einstellungen = {
   standardPause: 30,
@@ -116,4 +116,55 @@ test("Streifen bei schiefem Foto: egal wo in der Kopfzeile getippt wird, die Kop
   nah(a.kopfVersatz, b.kopfVersatz);
   nah(Math.hypot(a.u.x, a.u.y), 1);
   nah(a.u.x * a.n.x + a.u.y * a.n.y, 0); // n steht senkrecht auf u
+});
+
+const lesung = (schichten, gefunden = true) => scanZuSchichten({ name_gefunden: gefunden, name_im_plan: "Muster", hinweis: "", schichten }, einstellungen, []);
+const namen = ["Groq", "OpenRouter"];
+
+test("Zweitmeinung: gleiche Lesung bleibt vorausgewählt und ohne Markierung", () => {
+  const s1 = [eintrag({ datum: "2026-11-07", beginn: "09:00", ende: "14:01", pause_min: 30 })];
+  const r = zweitmeinung(lesung(s1), lesung(s1), namen);
+  assert.equal(r.eintraege.length, 1);
+  assert.equal(r.eintraege[0].abweichung, "");
+  assert.equal(r.eintraege[0].auswahl, true);
+});
+
+test("Zweitmeinung: abweichende Zeit wird markiert, nicht vorausgewählt und nennt die andere Lesung", () => {
+  const r = zweitmeinung(
+    lesung([eintrag({ datum: "2026-11-07", beginn: "09:00", ende: "14:01", pause_min: 30 })]),
+    lesung([eintrag({ datum: "2026-11-07", beginn: "09:00", ende: "14:00", pause_min: 30 })]),
+    namen,
+  );
+  assert.equal(r.eintraege.length, 1);
+  assert.equal(r.eintraege[0].ende, "14:01"); // Werte von Groq, zum Korrigieren
+  assert.equal(r.eintraege[0].auswahl, false);
+  assert.match(r.eintraege[0].abweichung, /OpenRouter liest: 09:00–14:00, 30 min Pause/);
+});
+
+test("Zweitmeinung: sieht nur ein Modell eine Schicht, wird sie unsicher angezeigt", () => {
+  const r = zweitmeinung(
+    lesung([eintrag({ datum: "2026-11-04", beginn: "16:00", ende: "18:00", pause_min: 0 })]),
+    lesung([eintrag({ datum: "2026-11-07", beginn: "09:00", ende: "14:01", pause_min: 30 })]),
+    namen,
+  );
+  assert.deepEqual(r.eintraege.map((e) => [e.datum, e.auswahl, e.abweichung]), [
+    ["2026-11-04", false, "Nur Groq sieht hier eine Schicht."],
+    ["2026-11-07", false, "Nur OpenRouter sieht hier eine Schicht."],
+  ]);
+});
+
+test("Zweitmeinung: findet nur ein Modell den Namen, sind alle Einträge unsicher", () => {
+  const r = zweitmeinung(lesung([], false), lesung([eintrag({ datum: "2026-11-07", beginn: "09:00", ende: "14:01", pause_min: 30 })]), namen);
+  assert.equal(r.nameGefunden, true);
+  assert.equal(r.eintraege[0].auswahl, false);
+  assert.match(r.eintraege[0].abweichung, /Nur OpenRouter hat deinen Namen gefunden/);
+});
+
+test("Zweitmeinung: schon eingetragene Schicht bleibt abgewählt, auch wenn beide gleich lesen", () => {
+  const s1 = [eintrag({ datum: "2026-10-14", beginn: "08:00", ende: "16:30" })];
+  const vorhanden = [{ datum: "2026-10-14", beginn: "08:00" }];
+  const a = scanZuSchichten({ name_gefunden: true, schichten: s1 }, einstellungen, vorhanden);
+  const r = zweitmeinung(a, a, namen);
+  assert.equal(r.eintraege[0].status, "doppelt");
+  assert.equal(r.eintraege[0].auswahl, false);
 });

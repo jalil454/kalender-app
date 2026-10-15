@@ -168,7 +168,7 @@ export function euroZuCent(text) {
 export function leereDaten() {
   return {
     version: VERSION,
-    einstellungen: { stundenlohn: 0, standardPause: 30, zahltag: 15, zahlungImFolgemonat: true, name: "", kuerzel: [], apiKey: "" },
+    einstellungen: { stundenlohn: 0, standardPause: 30, zahltag: 15, zahlungImFolgemonat: true, name: "", kuerzel: [], apiKey: "", apiKey2: "" },
     schichten: [],
     abos: [],
     ausgaben: [],
@@ -204,13 +204,14 @@ export function pruefeDaten(d) {
   pruefe(d.kontostand === null || (ganzeZahl(d.kontostand.betrag) && istDatum(d.kontostand.datum)), "Kontostand ist ungültig.");
 }
 
-// Der API-Key wird nie exportiert.
+// API-Keys werden nie exportiert.
 export function exportiere(daten) {
-  const { apiKey, ...einstellungen } = daten.einstellungen;
+  const { apiKey, apiKey2, ...einstellungen } = daten.einstellungen;
   return JSON.stringify({ ...daten, einstellungen }, null, 2);
 }
 
-export function importiere(inhalt, apiKey = "") {
+// Beim Import bleiben die Keys dieses Geräts erhalten.
+export function importiere(inhalt, { apiKey = "", apiKey2 = "" } = {}) {
   let d;
   try {
     d = JSON.parse(inhalt);
@@ -218,7 +219,7 @@ export function importiere(inhalt, apiKey = "") {
     throw new Error("Die Datei ist kein gültiges JSON.");
   }
   pruefeDaten(d);
-  return { ...d, einstellungen: { ...d.einstellungen, apiKey } };
+  return { ...d, einstellungen: { ...d.einstellungen, apiKey, apiKey2 } };
 }
 
 // ---------- Kalender-Export (.ics) ----------

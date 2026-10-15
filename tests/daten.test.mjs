@@ -5,7 +5,7 @@ import { exportiere, importiere, leereDaten, mitStandardwerten } from "../src/lo
 
 function beispiel() {
   const d = leereDaten();
-  d.einstellungen = { ...d.einstellungen, stundenlohn: 1390, name: "Muster", kuerzel: [{ code: "F", beginn: "06:00", ende: "14:00", pause: 30 }], apiKey: "sk-ant-test-geheim" };
+  d.einstellungen = { ...d.einstellungen, stundenlohn: 1390, name: "Muster", kuerzel: [{ code: "F", beginn: "06:00", ende: "14:00", pause: 30 }], apiKey: "sk-ant-test-geheim", apiKey2: "sk-or-test-geheim" };
   d.schichten = [{ id: "s1", datum: "2026-10-14", beginn: "08:00", ende: "16:30", pause: 30, lohn: 1390, notiz: "Kasse, Lager" }];
   d.abos = [{ id: "a1", name: "Streaming", betrag: 999, tag: 20, rhythmus: 1, abMonat: "2026-01", bisMonat: "" }];
   d.ausgaben = [{ id: "e1", name: "Schuhe", betrag: 5995, datum: "2026-10-20" }];
@@ -14,14 +14,16 @@ function beispiel() {
   return d;
 }
 
-test("Export und Import ergeben dieselben Daten, der API-Key bleibt der des Geräts", () => {
+test("Export und Import ergeben dieselben Daten, die API-Keys bleiben die des Geräts", () => {
   const original = beispiel();
-  const zurueck = importiere(exportiere(original), "geraete-key");
-  assert.deepEqual(zurueck, { ...original, einstellungen: { ...original.einstellungen, apiKey: "geraete-key" } });
+  const zurueck = importiere(exportiere(original), { apiKey: "geraete-key", apiKey2: "geraete-key-2" });
+  assert.deepEqual(zurueck, { ...original, einstellungen: { ...original.einstellungen, apiKey: "geraete-key", apiKey2: "geraete-key-2" } });
 });
 
-test("der API-Key steht nie in der Export-Datei", () => {
-  assert.equal(exportiere(beispiel()).includes("sk-ant-test-geheim"), false);
+test("keiner der API-Keys steht in der Export-Datei", () => {
+  const text = exportiere(beispiel());
+  assert.equal(text.includes("sk-ant-test-geheim"), false);
+  assert.equal(text.includes("sk-or-test-geheim"), false);
 });
 
 test("kaputtes JSON wird abgelehnt", () => {

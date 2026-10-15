@@ -1,7 +1,7 @@
 // Oberfläche der Kalender-App: zeichnet die Ansichten und verarbeitet Eingaben.
 import * as L from "./logic.js";
 import { laden, speichern, dauerhaftSpeichern } from "./store.js";
-import { analysiereDienstplan, ausschnittErstellen, ladeBild, scanZuSchichten, streifen } from "./scan.js";
+import { analysiereDienstplan, ausschnittErstellen, ladeBild, scanZuSchichten, streifen, zweitmeinung } from "./scan.js";
 
 let daten = laden();
 let heute = L.isoVon(new Date());
@@ -256,8 +256,9 @@ function ansichtEinstellungen() {
     <div class="gruppe">
       ${feld("Name im Plan", `<input data-einstellung="name" value="${esc(e.name)}" placeholder="z. B. Müller" autocomplete="off" autocapitalize="words">`)}
       ${feld("Groq-API-Key", `<input data-einstellung="apiKey" type="password" value="${esc(e.apiKey)}" placeholder="gsk_…" autocomplete="off" spellcheck="false">`)}
+      ${feld("OpenRouter-Key", `<input data-einstellung="apiKey2" type="password" value="${esc(e.apiKey2)}" placeholder="optional, sk-or-…" autocomplete="off" spellcheck="false">`)}
     </div>
-    <p class="fussnote">Den kostenlosen Key legst du auf console.groq.com an. Er bleibt nur auf diesem Gerät und steht nie in der Sicherung.</p>
+    <p class="fussnote">Den kostenlosen Groq-Key legst du auf console.groq.com an. Optional als Zweitmeinung: ein kostenloser Key von openrouter.ai. Dann liest ein zweites Modell denselben Ausschnitt, und Abweichungen werden markiert. Die Keys bleiben nur auf diesem Gerät und stehen nie in der Sicherung.</p>
 
     <h2 class="gruppen-titel">Schichtkürzel</h2>
     <div class="gruppe">
@@ -567,12 +568,23 @@ async function scanSenden(f) {
   const abbruch = new AbortController();
   scan.abbruch = abbruch;
   const inhalt = $sheet.querySelector(".sheet-inhalt");
-  inhalt.innerHTML = `<div class="laden" role="status"><span class="kreis" aria-hidden="true"></span><p>Groq liest den Dienstplan …</p><p class="fussnote">Das dauert meist bis zu einer Minute.</p></div>`;
+  const e = daten.einstellungen;
+  inhalt.innerHTML = `<div class="laden" role="status"><span class="kreis" aria-hidden="true"></span><p>${e.apiKey2 ? "Groq und OpenRouter lesen" : "Groq liest"} den Dienstplan …</p><p class="fussnote">Das dauert meist bis zu einer Minute.</p></div>`;
+  const lies = (anbieter, apiKey) => analysiereDienstplan({ anbieter, apiKey, bild: scan.ausschnitt.base64, name: e.name, heute, kuerzel: e.kuerzel, signal: abbruch.signal }).then((antwort) => scanZuSchichten(antwort, e, daten.schichten));
   try {
-    const e = daten.einstellungen;
-    const antwort = await analysiereDienstplan({ apiKey: e.apiKey, bild: scan.ausschnitt.base64, name: e.name, heute, kuerzel: e.kuerzel, signal: abbruch.signal });
+    let ergebnis;
+    if (!e.apiKey2) {
+      ergebnis = await lies("groq", e.apiKey);
+    } else {
+      // Beide gleichzeitig; fällt einer aus, zählt der andere allein, mit Hinweis.
+      const [groq, openrouter] = await Promise.allSettled([lies("groq", e.apiKey), lies("openrouter", e.apiKey2)]);
+      if (groq.status === "fulfilled" && openrouter.status === "fulfilled") ergebnis = zweitmeinung(groq.value, openrouter.value, ["Groq", "OpenRouter"]);
+      else if (groq.status === "fulfilled") ergebnis = { ...groq.value, ausfall: `Zweitmeinung fehlgeschlagen: ${openrouter.reason.message}` };
+      else if (openrouter.status === "fulfilled") ergebnis = { ...openrouter.value, ausfall: `Groq fehlgeschlagen: ${groq.reason.message}` };
+      else throw groq.reason;
+    }
     if (scan?.abbruch !== abbruch) return; // Sheet wurde inzwischen geschlossen
-    zeigeScanErgebnis(f, scanZuSchichten(antwort, e, daten.schichten));
+    zeigeScanErgebnis(f, ergebnis);
   } catch (fehler) {
     if (abbruch.signal.aborted || scan?.abbruch !== abbruch) return;
     inhalt.innerHTML = `<p class="sheet-text fehler" role="alert">${esc(fehler.message)}</p><button type="button" class="knopf" data-aktion="scan">Noch einmal</button>`;
@@ -582,7 +594,7 @@ async function scanSenden(f) {
 function zeigeScanErgebnis(f, r) {
   scan.ergebnis = r;
   const inhalt = $sheet.querySelector(".sheet-inhalt");
-  const hinweis = r.hinweis ? `<p class="fussnote">Hinweis von Groq: ${esc(r.hinweis)}</p>` : "";
+  const hinweis = (r.hinweis ? `<p class="fussnote">Hinweis: ${esc(r.hinweis)}</p>` : "") + (r.ausfall ? `<p class="fussnote achtung">${esc(r.ausfall)}</p>` : "");
   if (!r.nameGefunden || !r.eintraege.length) {
     const text = r.nameGefunden ? `Für „${esc(r.nameImPlan)}“ stehen keine Arbeitstage im Plan.` : "Dein Name wurde im Plan nicht eindeutig gefunden. Prüf die Schreibweise oder nimm ein schärferes Foto.";
     inhalt.innerHTML = `<p class="sheet-text" role="alert">${text}</p>${hinweis}<button type="button" class="knopf" data-aktion="scan">Anderes Foto</button>`;
@@ -591,11 +603,13 @@ function zeigeScanErgebnis(f, r) {
   const zeilen = r.eintraege
     .map((e, i) => {
       const status = e.status === "doppelt" ? "Schon eingetragen" : e.status === "unklar" ? `„${esc(e.kuerzel || e.roh)}“ ist unbekannt: Zeiten eintragen` : `Im Plan: ${esc(e.roh)}`;
+      const abweichung = e.abweichung ? `<span class="unter achtung">Unsicher: ${esc(e.abweichung)}</span>` : "";
       return `<div class="zeile scan-zeile">
         <label class="auswahl-ziel"><input type="checkbox" class="auswahl" name="auswahl-${i}"${e.auswahl ? " checked" : ""} aria-label="${datumLang(e.datum)} übernehmen"></label>
         <div class="haupt">
           <span class="titel">${datumMittel(e.datum)}</span>
           <span class="unter${e.status === "unklar" ? " achtung" : ""}">${status}</span>
+          ${abweichung}
           <div class="zeiten">
             <input type="time" class="mini" name="beginn-${i}" value="${e.beginn}" aria-label="Beginn">
             <span aria-hidden="true">–</span>
@@ -606,7 +620,9 @@ function zeigeScanErgebnis(f, r) {
       </div>`;
     })
     .join("");
-  inhalt.innerHTML = `<p class="fussnote">Gefunden als „${esc(r.nameImPlan)}“. Prüf die Zeiten und wähl aus, was übernommen wird.</p>
+  const anzahlUnsicher = r.eintraege.filter((e) => e.abweichung).length;
+  const vergleich = !("abweichung" in r.eintraege[0]) ? "" : anzahlUnsicher ? ` ${anzahlUnsicher === 1 ? "1 Eintrag ist" : `${anzahlUnsicher} Einträge sind`} unsicher, weil die beiden Modelle verschieden lesen.` : " Groq und OpenRouter lesen dasselbe.";
+  inhalt.innerHTML = `<p class="fussnote">Gefunden als „${esc(r.nameImPlan)}“.${vergleich} Prüf die Zeiten und wähl aus, was übernommen wird.</p>
     <div class="gruppe abstand-oben">${zeilen}</div>
     ${hinweis}
     <button type="submit" class="knopf" data-scan-knopf></button>`;
@@ -665,7 +681,7 @@ async function importieren(eingabe) {
   eingabe.value = "";
   if (!datei) return;
   try {
-    const neu = L.importiere(await datei.text(), daten.einstellungen.apiKey);
+    const neu = L.importiere(await datei.text(), daten.einstellungen);
     if (!confirm("Die Sicherung ersetzt alle Daten auf diesem Gerät. Fortfahren?")) return;
     daten = neu;
     sichern();
