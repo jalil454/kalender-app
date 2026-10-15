@@ -10,7 +10,8 @@ const einstellungen = {
     { code: "N", beginn: "22:00", ende: "06:00", pause: 45 },
   ],
 };
-const eintrag = (felder) => ({ datum: "2026-10-14", beginn: "", ende: "", pause_min: 0, kuerzel: "", roh: "", ...felder });
+// pause_min -1 heißt: im Plan steht keine Pause
+const eintrag = (felder) => ({ datum: "2026-10-14", beginn: "", ende: "", pause_min: -1, kuerzel: "", roh: "", ...felder });
 
 test("Uhrzeiten aus dem Plan werden übernommen, ohne Pause gilt die Standardpause", () => {
   const r = scanZuSchichten({ name_gefunden: true, name_im_plan: "Muster", hinweis: "", schichten: [eintrag({ beginn: "08:00", ende: "16:30", roh: "8-16:30" })] }, einstellungen, []);
@@ -47,6 +48,17 @@ test("schon eingetragene Schicht ist markiert und nicht ausgewählt", () => {
 test("Pause aus dem Plan hat Vorrang vor Kürzel und Standard", () => {
   const [e] = scanZuSchichten({ name_gefunden: true, schichten: [eintrag({ kuerzel: "F", pause_min: 15 })] }, einstellungen, []).eintraege;
   assert.equal(e.pause, 15);
+});
+
+test("Pause 0:00 aus dem Plan bleibt 0 und wird nicht durch Kürzel oder Standard ersetzt", () => {
+  const [mitKuerzel, ohne] = scanZuSchichten({ name_gefunden: true, schichten: [eintrag({ kuerzel: "F", pause_min: 0 }), eintrag({ datum: "2026-10-15", beginn: "16:00", ende: "18:00", pause_min: 0 })] }, einstellungen, []).eintraege;
+  assert.equal(mitKuerzel.pause, 0);
+  assert.equal(ohne.pause, 0);
+});
+
+test("Bereichskürzel vor einer Uhrzeit: Zeiten aus dem Plan gelten, auch wenn das Kürzel unbekannt ist", () => {
+  const [e] = scanZuSchichten({ name_gefunden: true, schichten: [eintrag({ beginn: "16:00", ende: "19:00", pause_min: 0, kuerzel: "KA", roh: "KA 16:00-19:00 0:00" })] }, einstellungen, []).eintraege;
+  assert.deepEqual([e.beginn, e.ende, e.pause, e.status, e.auswahl], ["16:00", "19:00", 0, "ok", true]);
 });
 
 test("Name nicht gefunden ergibt keine Vorschläge, auch wenn Einträge mitkommen", () => {

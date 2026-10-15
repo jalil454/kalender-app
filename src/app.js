@@ -255,9 +255,9 @@ function ansichtEinstellungen() {
     <h2 class="gruppen-titel">Dienstplan-Foto</h2>
     <div class="gruppe">
       ${feld("Name im Plan", `<input data-einstellung="name" value="${esc(e.name)}" placeholder="z. B. Müller" autocomplete="off" autocapitalize="words">`)}
-      ${feld("Gemini-API-Key", `<input data-einstellung="apiKey" type="password" value="${esc(e.apiKey)}" placeholder="AIza…" autocomplete="off" spellcheck="false">`)}
+      ${feld("Grok-API-Key", `<input data-einstellung="apiKey" type="password" value="${esc(e.apiKey)}" placeholder="xai-…" autocomplete="off" spellcheck="false">`)}
     </div>
-    <p class="fussnote">Den kostenlosen Key bekommst du auf aistudio.google.com. Er bleibt nur auf diesem Gerät und steht nie in der Sicherung. Im kostenlosen Tarif darf Google die Fotos zur Verbesserung seiner Produkte nutzen, also auch die Namen auf dem Dienstplan.</p>
+    <p class="fussnote">Den Key legst du auf console.x.ai an und lädst dort Guthaben auf. Er bleibt nur auf diesem Gerät und steht nie in der Sicherung. Jede Analyse kostet ein paar Cent.</p>
 
     <h2 class="gruppen-titel">Schichtkürzel</h2>
     <div class="gruppe">
@@ -480,7 +480,7 @@ function sheetScan() {
   if (!e.apiKey) {
     oeffneSheet(
       "Dienstplan scannen",
-      `<p class="sheet-text">Für die Foto-Analyse brauchst du einen kostenlosen API-Key von Google (aistudio.google.com). Trag ihn in den Einstellungen ein.</p><button type="button" class="knopf" data-aktion="einstellungen">Zu den Einstellungen</button>`,
+      `<p class="sheet-text">Für die Foto-Analyse brauchst du einen API-Key von xAI (console.x.ai). Trag ihn in den Einstellungen ein.</p><button type="button" class="knopf" data-aktion="einstellungen">Zu den Einstellungen</button>`,
       { form: "info", knopf: "" },
     );
     return;
@@ -490,7 +490,7 @@ function sheetScan() {
     "Dienstplan scannen",
     `<div class="gruppe">${feld("Dein Name im Plan", `<input name="name" required maxlength="60" placeholder="z. B. Müller" autocomplete="off" value="${esc(e.name)}">`)}</div>
     <label class="foto-wahl"><input type="file" name="foto" accept="image/*" required><span data-foto-name>Foto auswählen oder aufnehmen</span></label>
-    <p class="fussnote">Das Foto wird verkleinert an Google Gemini geschickt. In die App kommt erst etwas, wenn du die Vorschläge bestätigst.</p>
+    <p class="fussnote">Das Foto wird verkleinert an Grok (xAI) geschickt. In die App kommt erst etwas, wenn du die Vorschläge bestätigst.</p>
     ${e.stundenlohn ? "" : '<p class="fussnote achtung">Noch kein Stundenlohn eingetragen: übernommene Schichten hätten 0 € Lohn.</p>'}
     <button type="submit" class="knopf">Analysieren</button>`,
     { form: "scan", knopf: "" },
@@ -505,7 +505,7 @@ async function scanStarten(f) {
   const abbruch = new AbortController();
   scan = { abbruch, ergebnis: null };
   const inhalt = $sheet.querySelector(".sheet-inhalt");
-  inhalt.innerHTML = `<div class="laden" role="status"><span class="kreis" aria-hidden="true"></span><p>Gemini liest den Dienstplan …</p><p class="fussnote">Das dauert meist bis zu einer Minute.</p></div>`;
+  inhalt.innerHTML = `<div class="laden" role="status"><span class="kreis" aria-hidden="true"></span><p>Grok liest den Dienstplan …</p><p class="fussnote">Das dauert meist bis zu einer Minute.</p></div>`;
   try {
     let bild;
     try {
@@ -525,7 +525,7 @@ async function scanStarten(f) {
 function zeigeScanErgebnis(f, r) {
   scan.ergebnis = r;
   const inhalt = $sheet.querySelector(".sheet-inhalt");
-  const hinweis = r.hinweis ? `<p class="fussnote">Hinweis von Gemini: ${esc(r.hinweis)}</p>` : "";
+  const hinweis = r.hinweis ? `<p class="fussnote">Hinweis von Grok: ${esc(r.hinweis)}</p>` : "";
   if (!r.nameGefunden || !r.eintraege.length) {
     const text = r.nameGefunden ? `Für „${esc(r.nameImPlan)}“ stehen keine Arbeitstage im Plan.` : "Dein Name wurde im Plan nicht eindeutig gefunden. Prüf die Schreibweise oder nimm ein schärferes Foto.";
     inhalt.innerHTML = `<p class="sheet-text" role="alert">${text}</p>${hinweis}<button type="button" class="knopf" data-aktion="scan">Anderes Foto</button>`;

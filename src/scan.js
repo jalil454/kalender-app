@@ -1,9 +1,9 @@
-// Dienstplan-Foto lesen: Bild verkleinern, an Google Gemini schicken, Antwort in Schichten übersetzen.
+// Dienstplan-Foto lesen: Bild verkleinern, an Grok (xAI) schicken, Antwort in Schichten übersetzen.
 import { istDatum, istZeit } from "./logic.js";
 
-// Gemini Interactions API; gemini-3.8-flash ist im kostenlosen Tarif enthalten.
-const ENDPUNKT = "https://generativelanguage.googleapis.com/v1beta/interactions";
-const MODELL = "gemini-3.8-flash";
+// xAI Responses API; grok-4.7 kann Bilder lesen.
+const ENDPUNKT = "https://api.x.ai/v1/responses";
+const MODELL = "grok-4.7";
 
 const SCHEMA = {
   type: "object",
@@ -34,16 +34,16 @@ const SCHEMA = {
 
 function anweisung(name, heute, kuerzel) {
   const bekannte = kuerzel.length ? `Bekannte Schichtkürzel in diesem Betrieb: ${kuerzel.map((k) => k.code).join(", ")}.` : "";
-  return `Das Bild zeigt einen Dienstplan. Heute ist der ${heute}.
+  return `Das Bild zeigt einen Dienstplan. Das Foto kann gedreht sein. Heute ist der ${heute}.
 
 Finde die Person „${name}“ und liste jeden Tag, an dem sie laut Plan arbeitet.
 
 - Der Name kann anders geschrieben sein: nur Nachname, „Nachname, Vorname“, Initialen oder ein Kürzel. Nimm die Zeile oder Spalte, die eindeutig passt, und schreib die Schreibweise aus dem Plan in name_im_plan. Passt keine eindeutig, setz name_gefunden auf false und lass schichten leer.
-- Lies das Datum aus den Kopfzeilen oder Kopfspalten. Fehlt das Jahr, nimm das Jahr, das am nächsten an heute liegt. Format JJJJ-MM-TT.
+- Lies das Datum aus den Kopfzeilen oder Kopfspalten. Ein zweistelliges Jahr wie „26“ heißt 2026. Fehlt das Jahr, nimm das Jahr, das am nächsten an heute liegt. Format JJJJ-MM-TT.
 - Steht eine Uhrzeit da (zum Beispiel „8-16:30“ oder „08:00–16:30“), schreib beginn und ende als HH:MM.
-- Steht nur ein Kürzel da (zum Beispiel „F“, „S“, „N“), schreib es in kuerzel und lass beginn und ende leer. Steht beides da, füll beides aus.
-- Steht eine Pause im Plan, schreib sie in Minuten in pause_min, sonst 0.
-- Lass Tage ohne Arbeit weg: frei, Urlaub, krank, Feiertag, leere Zellen, Striche.
+- Steht nur ein Kürzel da (zum Beispiel „F“, „S“, „N“), schreib es in kuerzel und lass beginn und ende leer. Steht ein Kürzel oder Bereich vor einer Uhrzeit (zum Beispiel „KA 16:00-18:00“), schreib das Kürzel in kuerzel und die Zeiten in beginn und ende.
+- Pausen stehen oft als Stunden:Minuten neben der Zeit: „0:45“ sind 45 Minuten, „0:30“ sind 30, „0:00“ ist 0. Schreib die Pause in Minuten in pause_min. Steht gar keine Pause im Plan, schreib -1.
+- Lass Tage ohne Arbeit weg: frei, abwesend, Urlaub, krank, Feiertag, leere Zellen, Striche.
 - roh ist der Zellinhalt genau wie im Bild.
 - Wenn etwas unsicher ist (unscharf, abgeschnitten, schwer zuzuordnen), beschreib es kurz in hinweis, sonst leerer Text.
 ${bekannte}`;
@@ -76,32 +76,34 @@ export async function analysiereDienstplan({ apiKey, bild, name, heute, kuerzel,
   try {
     antwort = await fetch(ENDPUNKT, {
       method: "POST",
-      // Key im Header statt in der URL, damit er in keinem Protokoll landet.
-      headers: { "x-goog-api-key": apiKey, "content-type": "application/json" },
+      headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
       body: JSON.stringify({
         model: MODELL,
-        store: false, // Anfrage nicht für späteres Abrufen bei Google ablegen
         input: [
-          { type: "image", data: bild, mime_type: "image/jpeg" },
-          { type: "text", text: anweisung(name, heute, kuerzel) },
+          {
+            role: "user",
+            content: [
+              { type: "input_image", image_url: `data:image/jpeg;base64,${bild}`, detail: "high" },
+              { type: "input_text", text: anweisung(name, heute, kuerzel) },
+            ],
+          },
         ],
-        response_format: { type: "text", mime_type: "application/json", schema: SCHEMA },
-        generation_config: { thinking_level: "medium" },
+        text: { format: { type: "json_schema", name: "dienstplan", schema: SCHEMA, strict: true } },
       }),
       signal,
     });
   } catch (fehler) {
     if (fehler.name === "AbortError") throw new Error("Abgebrochen.");
-    throw new Error("Keine Verbindung zu Gemini. Bist du online?");
+    throw new Error("Keine Verbindung zu Grok. Bist du online?");
   }
   const daten = await antwort.json().catch(() => null);
-  if (!antwort.ok) throw new Error(fehlerText(antwort.status, daten?.error?.message ?? ""));
-  if (daten?.status !== "completed") throw new Error(`Gemini hat nicht fertig geantwortet (${daten?.status ?? "unbekannt"}). Versuch es noch einmal.`);
-  const text = (daten.steps ?? [])
-    .filter((schritt) => schritt.type === "model_output")
-    .flatMap((schritt) => schritt.content ?? [])
-    .filter((teil) => teil.type === "text")
-    .map((teil) => teil.text)
+  if (!antwort.ok) throw new Error(fehlerText(antwort.status, daten?.error?.message ?? daten?.error ?? ""));
+  if (daten?.status && daten.status !== "completed") throw new Error(`Grok hat nicht fertig geantwortet (${daten.status}). Versuch es noch einmal.`);
+  const text = (daten?.output ?? [])
+    .filter((teil) => teil.type === "message")
+    .flatMap((teil) => teil.content ?? [])
+    .filter((inhalt) => inhalt.type === "output_text")
+    .map((inhalt) => inhalt.text)
     .join("");
   try {
     return JSON.parse(text);
@@ -111,10 +113,10 @@ export async function analysiereDienstplan({ apiKey, bild, name, heute, kuerzel,
 }
 
 function fehlerText(status, meldung) {
-  if (status === 400 && /api.?key/i.test(meldung)) return "Der API-Key ist ungültig.";
-  if (status === 401 || status === 403) return "Der API-Key ist ungültig oder darf Gemini nicht nutzen.";
-  if (status === 429) return "Das kostenlose Limit ist erreicht. Warte eine Minute und versuch es noch einmal.";
-  if (status >= 500) return "Gemini ist gerade gestört. Versuch es später noch einmal.";
+  if (status === 401 || (status === 400 && /api.?key/i.test(meldung))) return "Der API-Key ist ungültig.";
+  if (status === 403) return "Der API-Key darf Grok nicht nutzen oder es ist kein Guthaben da (console.x.ai).";
+  if (status === 429) return "Zu viele Anfragen oder Guthaben aufgebraucht. Warte kurz oder prüf dein Guthaben auf console.x.ai.";
+  if (status >= 500) return "Grok ist gerade gestört. Versuch es später noch einmal.";
   return `Anfrage abgelehnt (${status}): ${meldung}`;
 }
 
@@ -128,7 +130,8 @@ export function scanZuSchichten(antwort, einstellungen, vorhandene) {
     const zeitenAusPlan = istZeit(roh.beginn) && istZeit(roh.ende);
     const beginn = zeitenAusPlan ? roh.beginn : k?.beginn ?? "";
     const ende = zeitenAusPlan ? roh.ende : k?.ende ?? "";
-    const pause = roh.pause_min > 0 ? roh.pause_min : k ? k.pause : einstellungen.standardPause;
+    const pauseAusPlan = Number.isInteger(roh.pause_min) && roh.pause_min >= 0; // -1 heißt: keine Pause im Plan
+    const pause = pauseAusPlan ? roh.pause_min : k ? k.pause : einstellungen.standardPause;
     const zeitenOk = istZeit(beginn) && istZeit(ende);
     const doppelt = zeitenOk && vorhandene.some((s) => s.datum === roh.datum && s.beginn === beginn);
     eintraege.push({
