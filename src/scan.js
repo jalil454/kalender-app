@@ -34,13 +34,14 @@ const SCHEMA = {
 
 function anweisung(name, heute, kuerzel) {
   const bekannte = kuerzel.length ? `Bekannte Schichtkürzel in diesem Betrieb: ${kuerzel.map((k) => k.code).join(", ")}.` : "";
-  return `Das Bild zeigt einen Dienstplan. Das Foto kann gedreht sein. Heute ist der ${heute}.
+  return `Das Bild zeigt Ausschnitte aus einem Dienstplan. Heute ist der ${heute}.
 
-Finde die Person „${name}“ und liste jeden Tag, an dem sie laut Plan arbeitet.
+Aufbau des Bildes: Es hat eine obere und eine untere Hälfte. In jeder Hälfte steht oben ein Streifen aus der Kopfzeile mit den Tagen und Daten und direkt darunter ein Streifen aus der Zeile einer Person. Die obere Hälfte zeigt den Anfang der Zeilen mit dem Namen, die untere Hälfte das Ende. Eine dunkle Linie trennt in jeder Hälfte die Kopfzeile von der Zeile der Person. Die Hälften überlappen sich etwas: Zähl einen Tag, der in beiden steht, nur einmal. Der Kopfzeilen-Streifen kann zusätzlich Teile der Nachbarzeilen zeigen; nimm daraus nur die Zeile mit den Tagen und Daten. Am Rand des Personen-Streifens können Nachbarzeilen angeschnitten sein; lies nur die Zeile in seiner Mitte.
 
-- Der Name kann anders geschrieben sein: nur Nachname, „Nachname, Vorname“, Initialen oder ein Kürzel. Nimm die Zeile oder Spalte, die eindeutig passt, und schreib die Schreibweise aus dem Plan in name_im_plan. Passt keine eindeutig, setz name_gefunden auf false und lass schichten leer.
-- Die Tabelle kann schief fotografiert sein. Folge der Zeile der Person an den Linien entlang über alle Spalten, damit du nicht in die Zeile darüber oder darunter rutschst.
-- Lies das Datum aus den Kopfzeilen oder Kopfspalten. Ein zweistelliges Jahr wie „26“ heißt 2026. Fehlt das Jahr, nimm das Jahr, das am nächsten an heute liegt. Format JJJJ-MM-TT.
+Liste jeden Tag, an dem diese Person laut Plan arbeitet.
+
+- Prüf, ob in der Personen-Zeile der Name „${name}“ steht. Die Schreibweise kann leicht abweichen, zum Beispiel „Nachname, Vorname“. Schreib den Namen aus dem Bild in name_im_plan. Steht dort eindeutig ein anderer Name, setz name_gefunden auf false und lass schichten leer.
+- Ordne jede Zelle der Personen-Zeile dem Tag darüber in der Kopfzeile zu. Ein zweistelliges Jahr wie „26“ heißt 2026. Fehlt das Jahr, nimm das Jahr, das am nächsten an heute liegt. Format JJJJ-MM-TT.
 - Steht eine Uhrzeit da (zum Beispiel „8-16:30“ oder „08:00–16:30“), schreib beginn und ende als HH:MM.
 - Steht nur ein Kürzel da (zum Beispiel „F“, „S“, „N“), schreib es in kuerzel und lass beginn und ende leer. Steht ein Kürzel oder Bereich vor einer Uhrzeit (zum Beispiel „KA 16:00-18:00“), schreib das Kürzel in kuerzel und die Zeiten in beginn und ende.
 - Pausen stehen oft als Stunden:Minuten neben der Zeit: „0:45“ sind 45 Minuten, „0:30“ sind 30, „0:00“ ist 0. Schreib die Pause in Minuten in pause_min. Steht gar keine Pause im Plan, schreib -1.
@@ -53,26 +54,86 @@ Antworte nur mit einem JSON-Objekt nach diesem JSON-Schema, ohne Codeblock und o
 ${JSON.stringify(SCHEMA)}`;
 }
 
-// Fotos vom iPhone sind groß; 2000 px an der langen Kante reichen zum Lesen einer Tabelle.
-export async function bildVorbereiten(datei, maxKante = 2000) {
-  const url = URL.createObjectURL(datei);
-  try {
-    // onload statt decode(): decode() wartet, solange die Seite verdeckt ist (z. B. App gewechselt).
-    const bild = await new Promise((fertig, fehler) => {
-      const b = new Image();
-      b.onload = () => fertig(b);
-      b.onerror = fehler;
-      b.src = url;
-    });
-    const faktor = Math.min(1, maxKante / Math.max(bild.naturalWidth, bild.naturalHeight));
-    const leinwand = document.createElement("canvas");
-    leinwand.width = Math.round(bild.naturalWidth * faktor);
-    leinwand.height = Math.round(bild.naturalHeight * faktor);
-    leinwand.getContext("2d").drawImage(bild, 0, 0, leinwand.width, leinwand.height);
-    return leinwand.toDataURL("image/jpeg", 0.85).split(",")[1];
-  } finally {
-    URL.revokeObjectURL(url);
-  }
+// onload statt decode(): decode() wartet, solange die Seite verdeckt ist (z. B. App gewechselt).
+export function ladeBild(url) {
+  return new Promise((fertig, fehler) => {
+    const bild = new Image();
+    bild.onload = () => fertig(bild);
+    bild.onerror = fehler;
+    bild.src = url;
+  });
+}
+
+// Aus drei Taps im Foto (Name, Ende der eigenen Zeile, irgendwo in der Kopfzeile) wird ein gerader Streifen:
+// u zeigt entlang der Zeile, n senkrecht dazu. Das gleicht gedrehte und schiefe Fotos aus.
+export function streifen(p1, p2, p3) {
+  const laenge = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+  const u = { x: (p2.x - p1.x) / laenge, y: (p2.y - p1.y) / laenge };
+  const n = { x: -u.y, y: u.x };
+  // Der Name beginnt links vom Tap, die letzte Zelle endet kurz hinter dem Tap.
+  const start = { x: p1.x - u.x * 0.15 * laenge, y: p1.y - u.y * 0.15 * laenge };
+  const kopfVersatz = (p3.x - p1.x) * n.x + (p3.y - p1.y) * n.y;
+  return {
+    u,
+    n,
+    start,
+    kopfStart: { x: start.x + n.x * kopfVersatz, y: start.y + n.y * kopfVersatz },
+    kopfVersatz,
+    laenge: 1.18 * laenge,
+    halbeDicke: 0.016 * laenge, // etwa anderthalb Zeilenhöhen bei einem dicht beschriebenen Plan
+    // Die Kopfzeile ist weit weg; bei schräg fotografiertem Blatt läuft sie nicht ganz parallel.
+    // Ein dickerer Streifen fängt das ab, Nachbarzeilen stören dort nicht.
+    kopfHalbeDicke: 0.04 * laenge,
+  };
+}
+
+// Schneidet Kopfzeile und eigene Zeile gerade aus dem Foto in voller Auflösung und legt sie
+// als zwei Hälften untereinander. So bekommt das Modell nur, was es braucht, und das gut lesbar.
+export function ausschnittErstellen(bild, [p1, p2, p3]) {
+  const g = streifen(p1, p2, p3);
+  const breite = 1400;
+  const ueberlapp = g.laenge * 0.04;
+  const massstab = breite / (g.laenge / 2 + ueberlapp);
+  const band = Math.round(2 * g.halbeDicke * massstab);
+  const kopfBand = Math.round(2 * g.kopfHalbeDicke * massstab);
+  const luecke = 10;
+  const abstand = 28;
+  const haelfte = kopfBand + luecke + band;
+  const leinwand = document.createElement("canvas");
+  leinwand.width = breite;
+  leinwand.height = 2 * haelfte + abstand;
+  const ctx = leinwand.getContext("2d");
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, leinwand.width, leinwand.height);
+  const zeichne = (anfang, oben, halbeDicke) => {
+    const hoehe = Math.round(2 * halbeDicke * massstab);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, oben, breite, hoehe);
+    ctx.clip();
+    // Bildpunkt p landet bei x = (p − anfang)·u und y = (p − anfang)·n + halbeDicke (mal Maßstab).
+    ctx.setTransform(
+      massstab * g.u.x,
+      massstab * g.n.x,
+      massstab * g.u.y,
+      massstab * g.n.y,
+      -massstab * (anfang.x * g.u.x + anfang.y * g.u.y),
+      oben + massstab * (halbeDicke - (anfang.x * g.n.x + anfang.y * g.n.y)),
+    );
+    ctx.drawImage(bild, 0, 0);
+    ctx.restore();
+  };
+  [0, g.laenge / 2 - ueberlapp].forEach((versatz, nummer) => {
+    const schiebe = (p) => ({ x: p.x + g.u.x * versatz, y: p.y + g.u.y * versatz });
+    const oben = nummer * (haelfte + abstand);
+    zeichne(schiebe(g.kopfStart), oben, g.kopfHalbeDicke);
+    // Dunkle Trennlinie: darüber Kopfzeile, darunter nur die eigene Zeile.
+    ctx.fillStyle = "#3a3936";
+    ctx.fillRect(0, oben + kopfBand, breite, luecke);
+    zeichne(schiebe(g.start), oben + kopfBand + luecke, g.halbeDicke);
+  });
+  const url = leinwand.toDataURL("image/jpeg", 0.92);
+  return { url, base64: url.split(",")[1] };
 }
 
 export async function analysiereDienstplan({ apiKey, bild, name, heute, kuerzel, signal }) {

@@ -1,7 +1,7 @@
 // Oberfläche der Kalender-App: zeichnet die Ansichten und verarbeitet Eingaben.
 import * as L from "./logic.js";
 import { laden, speichern, dauerhaftSpeichern } from "./store.js";
-import { analysiereDienstplan, bildVorbereiten, scanZuSchichten } from "./scan.js";
+import { analysiereDienstplan, ausschnittErstellen, ladeBild, scanZuSchichten, streifen } from "./scan.js";
 
 let daten = laden();
 let heute = L.isoVon(new Date());
@@ -485,37 +485,94 @@ function sheetScan() {
     );
     return;
   }
+  if (scan?.url) URL.revokeObjectURL(scan.url);
   scan = { abbruch: null, ergebnis: null };
   oeffneSheet(
     "Dienstplan scannen",
     `<div class="gruppe">${feld("Dein Name im Plan", `<input name="name" required maxlength="60" placeholder="z. B. Müller" autocomplete="off" value="${esc(e.name)}">`)}</div>
     <label class="foto-wahl"><input type="file" name="foto" accept="image/*" required><span data-foto-name>Foto auswählen oder aufnehmen</span></label>
-    <p class="fussnote">Das Foto wird verkleinert an Groq geschickt. In die App kommt erst etwas, wenn du die Vorschläge bestätigst.</p>
+    <p class="fussnote">Danach tippst du im Foto auf deinen Namen, auf das Ende deiner Zeile und auf die Datumszeile. Nur dieser Ausschnitt geht an Groq. In die App kommt erst etwas, wenn du die Vorschläge bestätigst.</p>
     ${e.stundenlohn ? "" : '<p class="fussnote achtung">Noch kein Stundenlohn eingetragen: übernommene Schichten hätten 0 € Lohn.</p>'}
-    <button type="submit" class="knopf">Analysieren</button>`,
+    <button type="submit" class="knopf">Weiter</button>`,
     { form: "scan", knopf: "" },
   );
 }
 
+const MARKIER_TEXTE = [
+  "Schritt 1 von 3: Tippe auf deinen Namen.",
+  "Schritt 2 von 3: Tippe in deiner Zeile auf das letzte Feld ganz am Ende.",
+  "Schritt 3 von 3: Tippe auf die Kopfzeile mit den Daten.",
+  "Prüf den Ausschnitt unten: Er muss die Daten und deine Zeile zeigen.",
+];
+
 async function scanStarten(f) {
-  const datei = f.elements.foto.files[0];
-  const name = f.elements.name.value.trim();
-  daten.einstellungen.name = name;
+  daten.einstellungen.name = f.elements.name.value.trim();
   speichern(daten);
+  const url = URL.createObjectURL(f.elements.foto.files[0]);
+  let bild;
+  try {
+    bild = await ladeBild(url);
+  } catch {
+    URL.revokeObjectURL(url);
+    return ungueltig(f.elements.foto, "Das Foto konnte nicht geöffnet werden. Versuch es als JPG oder PNG.");
+  }
+  scan = { abbruch: null, ergebnis: null, url, bild, punkte: [], ausschnitt: null };
+  f.dataset.form = "scan-markieren";
+  $sheet.querySelector(".sheet-inhalt").innerHTML = `
+    <p class="schritt" data-schritt aria-live="polite">${MARKIER_TEXTE[0]}</p>
+    <div class="zoom" role="group" aria-label="Vergrößerung">${[1, 2, 3].map((z) => `<button type="button" data-aktion="zoom" data-faktor="${z}" aria-pressed="${z === 2}">${z}×</button>`).join("")}</div>
+    <div class="foto-rahmen"><div class="foto-flaeche" data-foto-flaeche style="width: 200%"><img src="${url}" alt="Dienstplan-Foto, zum Markieren antippen" data-aktion="markieren"></div></div>
+    <div data-ausschnitt hidden><p class="fussnote">Das geht an Groq:</p><img class="ausschnitt" alt="Ausschnitt mit Datumszeile und deiner Zeile"></div>
+    <div class="knopf-reihe"><button type="button" class="knopf zweit" data-aktion="neu-markieren">Neu markieren</button><button type="submit" class="knopf" data-scan-senden disabled>Analysieren</button></div>`;
+}
+
+function markieren(bildEl, ereignis) {
+  if (!scan?.bild || scan.punkte.length >= 3) return;
+  const { bild, punkte } = scan;
+  const p = { x: (ereignis.offsetX / bildEl.clientWidth) * bild.naturalWidth, y: (ereignis.offsetY / bildEl.clientHeight) * bild.naturalHeight };
+  const hinweis = $sheet.querySelector("[data-schritt]");
+  if (punkte.length === 1 && Math.hypot(p.x - punkte[0].x, p.y - punkte[0].y) < 0.1 * Math.hypot(bild.naturalWidth, bild.naturalHeight)) {
+    hinweis.textContent = "Zu nah am Namen. Tippe auf das letzte Feld ganz am Ende deiner Zeile.";
+    return;
+  }
+  if (punkte.length === 2) {
+    const g = streifen(punkte[0], punkte[1], p);
+    if (Math.abs(g.kopfVersatz) < g.halbeDicke) {
+      hinweis.textContent = "Das ist noch deine Zeile. Tippe auf die Kopfzeile mit den Daten.";
+      return;
+    }
+  }
+  punkte.push(p);
+  zeichneMarken();
+  hinweis.textContent = MARKIER_TEXTE[punkte.length];
+  if (punkte.length === 3) {
+    scan.ausschnitt = ausschnittErstellen(bild, punkte);
+    const box = $sheet.querySelector("[data-ausschnitt]");
+    box.querySelector("img").src = scan.ausschnitt.url;
+    box.hidden = false;
+    $sheet.querySelector("[data-scan-senden]").disabled = false;
+    box.scrollIntoView({ block: "nearest" });
+  }
+}
+
+function zeichneMarken() {
+  const flaeche = $sheet.querySelector("[data-foto-flaeche]");
+  flaeche.querySelectorAll(".marke-nr").forEach((m) => m.remove());
+  scan.punkte.forEach((p, i) => {
+    flaeche.insertAdjacentHTML("beforeend", `<span class="marke-nr" style="left: ${(p.x / scan.bild.naturalWidth) * 100}%; top: ${(p.y / scan.bild.naturalHeight) * 100}%" aria-hidden="true">${i + 1}</span>`);
+  });
+}
+
+async function scanSenden(f) {
   const abbruch = new AbortController();
-  scan = { abbruch, ergebnis: null };
+  scan.abbruch = abbruch;
   const inhalt = $sheet.querySelector(".sheet-inhalt");
   inhalt.innerHTML = `<div class="laden" role="status"><span class="kreis" aria-hidden="true"></span><p>Groq liest den Dienstplan …</p><p class="fussnote">Das dauert meist bis zu einer Minute.</p></div>`;
   try {
-    let bild;
-    try {
-      bild = await bildVorbereiten(datei);
-    } catch {
-      throw new Error("Das Foto konnte nicht geöffnet werden. Versuch es als JPG oder PNG.");
-    }
-    const antwort = await analysiereDienstplan({ apiKey: daten.einstellungen.apiKey, bild, name, heute, kuerzel: daten.einstellungen.kuerzel, signal: abbruch.signal });
+    const e = daten.einstellungen;
+    const antwort = await analysiereDienstplan({ apiKey: e.apiKey, bild: scan.ausschnitt.base64, name: e.name, heute, kuerzel: e.kuerzel, signal: abbruch.signal });
     if (scan?.abbruch !== abbruch) return; // Sheet wurde inzwischen geschlossen
-    zeigeScanErgebnis(f, scanZuSchichten(antwort, daten.einstellungen, daten.schichten));
+    zeigeScanErgebnis(f, scanZuSchichten(antwort, e, daten.schichten));
   } catch (fehler) {
     if (abbruch.signal.aborted || scan?.abbruch !== abbruch) return;
     inhalt.innerHTML = `<p class="sheet-text fehler" role="alert">${esc(fehler.message)}</p><button type="button" class="knopf" data-aktion="scan">Noch einmal</button>`;
@@ -689,6 +746,19 @@ const AKTIONEN = {
     sichern();
   },
   scan: () => sheetScan(),
+  markieren: (el, ereignis) => markieren(el, ereignis),
+  zoom(el) {
+    $sheet.querySelector("[data-foto-flaeche]").style.width = `${Number(el.dataset.faktor) * 100}%`;
+    $sheet.querySelectorAll('[data-aktion="zoom"]').forEach((k) => k.setAttribute("aria-pressed", String(k === el)));
+  },
+  "neu-markieren"() {
+    scan.punkte = [];
+    scan.ausschnitt = null;
+    zeichneMarken();
+    $sheet.querySelector("[data-schritt]").textContent = MARKIER_TEXTE[0];
+    $sheet.querySelector("[data-ausschnitt]").hidden = true;
+    $sheet.querySelector("[data-scan-senden]").disabled = true;
+  },
   schliessen: () => $sheet.close(),
   export: () => teilenOderLaden(`kalender-sicherung-${heute}.json`, L.exportiere(daten), "application/json"),
   ics: () => teilenOderLaden(`schichten-${heute}.ics`, L.icsExport(daten.schichten), "text/calendar"),
@@ -702,7 +772,7 @@ const AKTIONEN = {
 
 document.addEventListener("click", (ereignis) => {
   const el = ereignis.target.closest("[data-aktion]");
-  if (el && AKTIONEN[el.dataset.aktion]) AKTIONEN[el.dataset.aktion](el);
+  if (el && AKTIONEN[el.dataset.aktion]) AKTIONEN[el.dataset.aktion](el, ereignis);
 });
 
 document.addEventListener("change", (ereignis) => {
@@ -726,6 +796,7 @@ $sheet.addEventListener("submit", (ereignis) => {
   const f = ereignis.target;
   const art = f.dataset.form;
   if (art === "scan") return void scanStarten(f);
+  if (art === "scan-markieren") return void scanSenden(f);
   if (art === "scan-uebernehmen") {
     if (scanUebernehmen(f) === false) return;
   } else if (SPEICHERN[art]) {
@@ -743,6 +814,7 @@ $sheet.addEventListener("click", (ereignis) => {
 
 $sheet.addEventListener("close", () => {
   scan?.abbruch?.abort();
+  if (scan?.url) URL.revokeObjectURL(scan.url);
   scan = null;
 });
 

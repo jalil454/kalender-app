@@ -1,7 +1,7 @@
 // G6: Antwort der Foto-Analyse wird in Schicht-Vorschläge übersetzt (ohne echten API-Aufruf).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { scanZuSchichten, jsonAusText } from "../src/scan.js";
+import { scanZuSchichten, jsonAusText, streifen } from "../src/scan.js";
 
 const einstellungen = {
   standardPause: 30,
@@ -87,4 +87,33 @@ test("ohne festes Schema: Zeit ohne führende Null und Pause als Text werden ver
     ["09:00", "14:01", 30, "ok"],
     ["08:00", "12:00", 30, "ok"],
   ]);
+});
+
+const nah = (a, b) => assert.ok(Math.abs(a - b) < 1e-9, `${a} ≠ ${b}`);
+
+test("Streifen bei geradem Foto: Zeile waagerecht, Kopfzeile darüber", () => {
+  const g = streifen({ x: 100, y: 500 }, { x: 1100, y: 500 }, { x: 150, y: 100 });
+  nah(g.u.x, 1); nah(g.u.y, 0); nah(g.n.x, -0); nah(g.n.y, 1);
+  nah(g.start.x, -50); nah(g.start.y, 500); // 15 % der Zeilenlänge vor dem Namen
+  nah(g.kopfVersatz, -400);
+  nah(g.kopfStart.x, -50); nah(g.kopfStart.y, 100);
+  nah(g.laenge, 1180); nah(g.halbeDicke, 16); nah(g.kopfHalbeDicke, 40);
+});
+
+test("Streifen bei um 90° gedrehtem Foto: Zeile läuft nach unten, Kopfzeile liegt rechts davon", () => {
+  const g = streifen({ x: 500, y: 100 }, { x: 500, y: 1100 }, { x: 900, y: 140 });
+  nah(g.u.x, 0); nah(g.u.y, 1); nah(g.n.x, -1); nah(g.n.y, 0);
+  nah(g.kopfVersatz, -400);
+  nah(g.kopfStart.x, 900); nah(g.kopfStart.y, -50);
+});
+
+test("Streifen bei schiefem Foto: egal wo in der Kopfzeile getippt wird, die Kopfzeile bleibt dieselbe", () => {
+  const p1 = { x: 0, y: 0 };
+  const p2 = { x: 1000, y: -50 }; // Zeile steigt nach rechts leicht an
+  const a = streifen(p1, p2, { x: 100, y: -300 });
+  const u = a.u;
+  const b = streifen(p1, p2, { x: 100 + u.x * 700, y: -300 + u.y * 700 }); // 700 px weiter entlang der Kopfzeile
+  nah(a.kopfVersatz, b.kopfVersatz);
+  nah(Math.hypot(a.u.x, a.u.y), 1);
+  nah(a.u.x * a.n.x + a.u.y * a.n.y, 0); // n steht senkrecht auf u
 });

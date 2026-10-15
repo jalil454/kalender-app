@@ -755,6 +755,92 @@ input::-webkit-date-and-time-value {
   text-align: center;
 }
 
+/* Markieren: Foto zoomen, drei Stellen antippen */
+.schritt {
+  margin: var(--a2) var(--a4) var(--a3);
+  font-weight: 600;
+}
+
+.zoom {
+  display: inline-grid;
+  grid-auto-flow: column;
+  margin: 0 0 var(--a2) var(--a4);
+  padding: 2px;
+  border-radius: 9px;
+  background: var(--flaeche-2);
+}
+
+.zoom button {
+  min-width: var(--ziel);
+  min-height: 34px;
+  border-radius: 7px;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.zoom button[aria-pressed="true"] {
+  background: var(--flaeche);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.12);
+}
+
+.foto-rahmen {
+  max-height: 55vh;
+  overflow: auto;
+  border-radius: var(--r);
+  background: var(--flaeche-2);
+}
+
+.foto-flaeche {
+  position: relative;
+}
+
+.foto-flaeche img {
+  display: block;
+  width: 100%;
+  height: auto;
+  cursor: crosshair;
+}
+
+.marke-nr {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  transform: translate(-50%, -50%);
+  border: 2px solid var(--flaeche);
+  border-radius: 50%;
+  background: var(--akzent);
+  color: var(--akzent-text);
+  font-size: 0.8rem;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+.ausschnitt {
+  display: block;
+  width: 100%;
+  margin-top: var(--a2);
+  border: 0.5px solid var(--linie);
+  border-radius: var(--r-klein);
+}
+
+.knopf-reihe {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--a3);
+  margin-top: var(--a5);
+}
+
+.knopf-reihe .knopf {
+  margin-top: 0;
+}
+
+.knopf.zweit {
+  background: var(--flaeche-2);
+  color: var(--text);
+}
+
 .kreis {
   display: inline-block;
   width: 28px;
