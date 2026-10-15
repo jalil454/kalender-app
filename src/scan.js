@@ -49,7 +49,7 @@ Finde die Person „${name}“ und liste jeden Tag, an dem sie laut Plan arbeite
 - Wenn etwas unsicher ist (unscharf, abgeschnitten, schwer zuzuordnen), beschreib es kurz in hinweis, sonst leerer Text.
 ${bekannte}
 
-Antworte nur mit einem JSON-Objekt nach diesem JSON-Schema:
+Antworte nur mit einem JSON-Objekt nach diesem JSON-Schema, ohne Codeblock und ohne weiteren Text:
 ${JSON.stringify(SCHEMA)}`;
 }
 
@@ -92,8 +92,8 @@ export async function analysiereDienstplan({ apiKey, bild, name, heute, kuerzel,
             ],
           },
         ],
-        response_format: { type: "json_object" },
-        // JSON-Modus verlangt "hidden" oder "parsed"; die Denkschritte brauchen wir nicht.
+        // Kein JSON-Modus: Groq lehnt sonst bei kleinsten Abweichungen die ganze Antwort ab (400).
+        // jsonAusText liest das JSON tolerant aus. Die Denkschritte brauchen wir nicht.
         reasoning_format: "hidden",
         reasoning_effort: "medium",
       }),
@@ -118,7 +118,9 @@ export function jsonAusText(text) {
   try {
     return JSON.parse(ohneDenken.slice(start, ende + 1));
   } catch {
-    throw new Error("Die Antwort konnte nicht gelesen werden.");
+    // Der Anfang der Antwort hilft bei der Fehlersuche.
+    const anfang = text.replace(/\s+/g, " ").trim().slice(0, 160);
+    throw new Error(`Die Antwort konnte nicht gelesen werden.${anfang ? ` Anfang der Antwort: „${anfang}“` : ""}`);
   }
 }
 
