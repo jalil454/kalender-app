@@ -95,7 +95,9 @@ export async function analysiereDienstplan({ apiKey, bild, name, heute, kuerzel,
         // Kein JSON-Modus: Groq lehnt sonst bei kleinsten Abweichungen die ganze Antwort ab (400).
         // jsonAusText liest das JSON tolerant aus. Die Denkschritte brauchen wir nicht.
         reasoning_format: "hidden",
-        reasoning_effort: "medium",
+        // Versteckte Denkschritte zählen zum Ausgabe-Limit; bei "medium" wurde die Antwort abgeschnitten.
+        reasoning_effort: "low",
+        max_completion_tokens: 16384, // Maximum dieses Modells
       }),
       signal,
     });
@@ -106,7 +108,7 @@ export async function analysiereDienstplan({ apiKey, bild, name, heute, kuerzel,
   const daten = await antwort.json().catch(() => null);
   if (!antwort.ok) throw new Error(fehlerText(antwort.status, daten?.error?.message ?? ""));
   const wahl = daten?.choices?.[0];
-  if (wahl?.finish_reason === "length") throw new Error("Die Antwort ist unvollständig. Versuch einen kleineren Ausschnitt.");
+  if (wahl?.finish_reason === "length") throw new Error("Groq hat die Antwort abgebrochen, weil sie zu lang wurde. Versuch es noch einmal.");
   return jsonAusText(wahl?.message?.content ?? "");
 }
 
