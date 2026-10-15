@@ -119,7 +119,7 @@ test("Streifen bei schiefem Foto: egal wo in der Kopfzeile getippt wird, die Kop
 });
 
 const lesung = (schichten, gefunden = true) => scanZuSchichten({ name_gefunden: gefunden, name_im_plan: "Muster", hinweis: "", schichten }, einstellungen, []);
-const namen = ["Groq", "OpenRouter"];
+const namen = ["Groq", "Mistral"];
 
 test("Zweitmeinung: gleiche Lesung bleibt vorausgewählt und ohne Markierung", () => {
   const s1 = [eintrag({ datum: "2026-11-07", beginn: "09:00", ende: "14:01", pause_min: 30 })];
@@ -138,7 +138,7 @@ test("Zweitmeinung: abweichende Zeit wird markiert, nicht vorausgewählt und nen
   assert.equal(r.eintraege.length, 1);
   assert.equal(r.eintraege[0].ende, "14:01"); // Werte von Groq, zum Korrigieren
   assert.equal(r.eintraege[0].auswahl, false);
-  assert.match(r.eintraege[0].abweichung, /OpenRouter liest: 09:00–14:00, 30 min Pause/);
+  assert.match(r.eintraege[0].abweichung, /Mistral liest: 09:00–14:00, 30 min Pause/);
 });
 
 test("Zweitmeinung: sieht nur ein Modell eine Schicht, wird sie unsicher angezeigt", () => {
@@ -149,7 +149,7 @@ test("Zweitmeinung: sieht nur ein Modell eine Schicht, wird sie unsicher angezei
   );
   assert.deepEqual(r.eintraege.map((e) => [e.datum, e.auswahl, e.abweichung]), [
     ["2026-11-04", false, "Nur Groq sieht hier eine Schicht."],
-    ["2026-11-07", false, "Nur OpenRouter sieht hier eine Schicht."],
+    ["2026-11-07", false, "Nur Mistral sieht hier eine Schicht."],
   ]);
 });
 
@@ -157,7 +157,7 @@ test("Zweitmeinung: findet nur ein Modell den Namen, sind alle Einträge unsiche
   const r = zweitmeinung(lesung([], false), lesung([eintrag({ datum: "2026-11-07", beginn: "09:00", ende: "14:01", pause_min: 30 })]), namen);
   assert.equal(r.nameGefunden, true);
   assert.equal(r.eintraege[0].auswahl, false);
-  assert.match(r.eintraege[0].abweichung, /Nur OpenRouter hat deinen Namen gefunden/);
+  assert.match(r.eintraege[0].abweichung, /Nur Mistral hat deinen Namen gefunden/);
 });
 
 test("Zweitmeinung: schon eingetragene Schicht bleibt abgewählt, auch wenn beide gleich lesen", () => {

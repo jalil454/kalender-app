@@ -256,9 +256,9 @@ function ansichtEinstellungen() {
     <div class="gruppe">
       ${feld("Name im Plan", `<input data-einstellung="name" value="${esc(e.name)}" placeholder="z. B. Müller" autocomplete="off" autocapitalize="words">`)}
       ${feld("Groq-API-Key", `<input data-einstellung="apiKey" type="password" value="${esc(e.apiKey)}" placeholder="gsk_…" autocomplete="off" spellcheck="false">`)}
-      ${feld("OpenRouter-Key", `<input data-einstellung="apiKey2" type="password" value="${esc(e.apiKey2)}" placeholder="optional, sk-or-…" autocomplete="off" spellcheck="false">`)}
+      ${feld("Mistral-Key", `<input data-einstellung="apiKey2" type="password" value="${esc(e.apiKey2)}" placeholder="optional" autocomplete="off" spellcheck="false">`)}
     </div>
-    <p class="fussnote">Den kostenlosen Groq-Key legst du auf console.groq.com an. Optional als Zweitmeinung: ein kostenloser Key von openrouter.ai. Dann liest ein zweites Modell denselben Ausschnitt, und Abweichungen werden markiert. Die Keys bleiben nur auf diesem Gerät und stehen nie in der Sicherung.</p>
+    <p class="fussnote">Den kostenlosen Groq-Key legst du auf console.groq.com an. Optional als Zweitmeinung: ein kostenloser Key von console.mistral.ai (Tarif „Experiment“); schalte dort unter Privacy das Training mit deinen Daten ab. Dann liest ein zweites Modell denselben Ausschnitt, und Abweichungen werden markiert. Die Keys bleiben nur auf diesem Gerät und stehen nie in der Sicherung.</p>
 
     <h2 class="gruppen-titel">Schichtkürzel</h2>
     <div class="gruppe">
@@ -569,7 +569,7 @@ async function scanSenden(f) {
   scan.abbruch = abbruch;
   const inhalt = $sheet.querySelector(".sheet-inhalt");
   const e = daten.einstellungen;
-  inhalt.innerHTML = `<div class="laden" role="status"><span class="kreis" aria-hidden="true"></span><p>${e.apiKey2 ? "Groq und OpenRouter lesen" : "Groq liest"} den Dienstplan …</p><p class="fussnote">Das dauert meist bis zu einer Minute.</p></div>`;
+  inhalt.innerHTML = `<div class="laden" role="status"><span class="kreis" aria-hidden="true"></span><p>${e.apiKey2 ? "Groq und Mistral lesen" : "Groq liest"} den Dienstplan …</p><p class="fussnote">Das dauert meist bis zu einer Minute.</p></div>`;
   const lies = (anbieter, apiKey) => analysiereDienstplan({ anbieter, apiKey, bild: scan.ausschnitt.base64, name: e.name, heute, kuerzel: e.kuerzel, signal: abbruch.signal }).then((antwort) => scanZuSchichten(antwort, e, daten.schichten));
   try {
     let ergebnis;
@@ -577,10 +577,10 @@ async function scanSenden(f) {
       ergebnis = await lies("groq", e.apiKey);
     } else {
       // Beide gleichzeitig; fällt einer aus, zählt der andere allein, mit Hinweis.
-      const [groq, openrouter] = await Promise.allSettled([lies("groq", e.apiKey), lies("openrouter", e.apiKey2)]);
-      if (groq.status === "fulfilled" && openrouter.status === "fulfilled") ergebnis = zweitmeinung(groq.value, openrouter.value, ["Groq", "OpenRouter"]);
-      else if (groq.status === "fulfilled") ergebnis = { ...groq.value, ausfall: `Zweitmeinung fehlgeschlagen: ${openrouter.reason.message}` };
-      else if (openrouter.status === "fulfilled") ergebnis = { ...openrouter.value, ausfall: `Groq fehlgeschlagen: ${groq.reason.message}` };
+      const [groq, mistral] = await Promise.allSettled([lies("groq", e.apiKey), lies("mistral", e.apiKey2)]);
+      if (groq.status === "fulfilled" && mistral.status === "fulfilled") ergebnis = zweitmeinung(groq.value, mistral.value, ["Groq", "Mistral"]);
+      else if (groq.status === "fulfilled") ergebnis = { ...groq.value, ausfall: `Zweitmeinung fehlgeschlagen: ${mistral.reason.message}` };
+      else if (mistral.status === "fulfilled") ergebnis = { ...mistral.value, ausfall: `Groq fehlgeschlagen: ${groq.reason.message}` };
       else throw groq.reason;
     }
     if (scan?.abbruch !== abbruch) return; // Sheet wurde inzwischen geschlossen
@@ -621,7 +621,7 @@ function zeigeScanErgebnis(f, r) {
     })
     .join("");
   const anzahlUnsicher = r.eintraege.filter((e) => e.abweichung).length;
-  const vergleich = !("abweichung" in r.eintraege[0]) ? "" : anzahlUnsicher ? ` ${anzahlUnsicher === 1 ? "1 Eintrag ist" : `${anzahlUnsicher} Einträge sind`} unsicher, weil die beiden Modelle verschieden lesen.` : " Groq und OpenRouter lesen dasselbe.";
+  const vergleich = !("abweichung" in r.eintraege[0]) ? "" : anzahlUnsicher ? ` ${anzahlUnsicher === 1 ? "1 Eintrag ist" : `${anzahlUnsicher} Einträge sind`} unsicher, weil die beiden Modelle verschieden lesen.` : " Groq und Mistral lesen dasselbe.";
   inhalt.innerHTML = `<p class="fussnote">Gefunden als „${esc(r.nameImPlan)}“.${vergleich} Prüf die Zeiten und wähl aus, was übernommen wird.</p>
     <div class="gruppe abstand-oben">${zeilen}</div>
     ${hinweis}

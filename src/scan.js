@@ -1,8 +1,8 @@
-// Dienstplan-Foto lesen: Ausschnitt an Groq (und optional OpenRouter) schicken, Antworten in Schichten übersetzen.
+// Dienstplan-Foto lesen: Ausschnitt an Groq (und optional Mistral) schicken, Antworten in Schichten übersetzen.
 import { istDatum, istZeit } from "./logic.js";
 
-// Beide Anbieter sind OpenAI-kompatibel und haben kostenlose Modelle, die Bilder lesen.
-// OpenRouter dient als Zweitmeinung, damit Lesefehler auffallen.
+// Beide Anbieter sind OpenAI-kompatibel und haben kostenlose Tarife mit Modellen, die Bilder lesen.
+// Mistral dient als Zweitmeinung, damit Lesefehler auffallen.
 export const ANBIETER = {
   groq: {
     name: "Groq",
@@ -11,10 +11,10 @@ export const ANBIETER = {
     // Versteckte Denkschritte zählen zum Ausgabe-Limit; bei "medium" wurde die Antwort abgeschnitten.
     extra: { reasoning_format: "hidden", reasoning_effort: "low", max_completion_tokens: 16384 },
   },
-  openrouter: {
-    name: "OpenRouter",
-    endpunkt: "https://openrouter.ai/api/v1/chat/completions",
-    modell: "google/gemma-4-31b-it:free",
+  mistral: {
+    name: "Mistral",
+    endpunkt: "https://api.mistral.ai/v1/chat/completions",
+    modell: "mistral-large-2512", // Mistral Large 3, im Gratis-Tarif „Experiment“ enthalten
     extra: {},
   },
 };
@@ -179,10 +179,14 @@ export async function analysiereDienstplan({ anbieter = "groq", apiKey, bild, na
     throw new Error(`Keine Verbindung zu ${a.name}. Bist du online?`);
   }
   const daten = await antwort.json().catch(() => null);
-  if (!antwort.ok) throw new Error(fehlerText(a.name, antwort.status, daten?.error?.message ?? ""));
+  // Groq meldet Fehler in error.message, Mistral in message oder detail.
+  const meldung = daten?.error?.message ?? daten?.message ?? (typeof daten?.detail === "string" ? daten.detail : "");
+  if (!antwort.ok) throw new Error(fehlerText(a.name, antwort.status, meldung));
   const wahl = daten?.choices?.[0];
   if (wahl?.finish_reason === "length") throw new Error(`${a.name} hat die Antwort abgebrochen, weil sie zu lang wurde. Versuch es noch einmal.`);
-  return jsonAusText(wahl?.message?.content ?? "");
+  // Manche Modelle liefern den Text als Liste von Teilen statt als einen String.
+  const inhalt = wahl?.message?.content;
+  return jsonAusText(Array.isArray(inhalt) ? inhalt.filter((t) => t.type === "text").map((t) => t.text).join("") : inhalt ?? "");
 }
 
 // Holt das JSON-Objekt aus der Antwort, auch wenn es in einem Codeblock oder hinter Denktext steht.
@@ -202,7 +206,6 @@ export function jsonAusText(text) {
 function fehlerText(name, status, meldung) {
   if (status === 401) return `Der ${name}-Key ist ungültig.`;
   if (status === 403) return `Der ${name}-Key darf dieses Modell nicht nutzen.`;
-  if (status === 404 && /data policy/i.test(meldung)) return "OpenRouter: In den Privacy-Einstellungen auf openrouter.ai musst du kostenlose Modelle freigeben.";
   if (status === 413) return "Das Foto ist zu groß.";
   if (status === 429) return `Das kostenlose Limit bei ${name} ist erreicht. Warte etwas und versuch es noch einmal.`;
   if (status >= 500) return `${name} ist gerade gestört. Versuch es später noch einmal.`;
