@@ -32,7 +32,7 @@ self.addEventListener("activate", (ereignis) => {
 
 self.addEventListener("fetch", (ereignis) => {
   const anfrage = ereignis.request;
-  // Anfragen an Grok gehen direkt ins Netz und werden nie gespeichert.
+  // Anfragen an Groq gehen direkt ins Netz und werden nie gespeichert.
   if (anfrage.method !== "GET" || new URL(anfrage.url).origin !== self.location.origin) return;
   ereignis.respondWith(
     // no-cache: beim Server nachfragen statt die 10 Minuten aus dem Browser-Cache zu nehmen,

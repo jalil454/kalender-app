@@ -1,7 +1,7 @@
 // G6: Antwort der Foto-Analyse wird in Schicht-Vorschläge übersetzt (ohne echten API-Aufruf).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { scanZuSchichten } from "../src/scan.js";
+import { scanZuSchichten, jsonAusText } from "../src/scan.js";
 
 const einstellungen = {
   standardPause: 30,
@@ -71,4 +71,20 @@ test("Name nicht gefunden ergibt keine Vorschläge, auch wenn Einträge mitkomme
 test("Vorschläge sind nach Datum sortiert", () => {
   const r = scanZuSchichten({ name_gefunden: true, schichten: [eintrag({ datum: "2026-10-20", beginn: "08:00", ende: "12:00" }), eintrag({ datum: "2026-10-03", beginn: "08:00", ende: "12:00" })] }, einstellungen, []);
   assert.deepEqual(r.eintraege.map((e) => e.datum), ["2026-10-03", "2026-10-20"]);
+});
+
+test("JSON wird auch aus Codeblock oder hinter Denktext gelesen, Unlesbares wird abgelehnt", () => {
+  assert.deepEqual(jsonAusText('{"a":1}'), { a: 1 });
+  assert.deepEqual(jsonAusText('```json\n{"a":{"b":[1,2]}}\n```'), { a: { b: [1, 2] } });
+  assert.deepEqual(jsonAusText('<think>Zeile {Muster} prüfen</think>{"a":2}'), { a: 2 });
+  assert.throws(() => jsonAusText("Kein JSON hier"), /nicht gelesen/);
+  assert.throws(() => jsonAusText(""), /nicht gelesen/);
+});
+
+test("ohne festes Schema: Zeit ohne führende Null und Pause als Text werden verstanden", () => {
+  const r = scanZuSchichten({ name_gefunden: true, schichten: [eintrag({ beginn: "9:00", ende: "14:01", pause_min: "30" }), eintrag({ datum: "2026-10-15", beginn: "08:00", ende: "12:00", pause_min: "" })] }, einstellungen, []);
+  assert.deepEqual(r.eintraege.map((e) => [e.beginn, e.ende, e.pause, e.status]), [
+    ["09:00", "14:01", 30, "ok"],
+    ["08:00", "12:00", 30, "ok"],
+  ]);
 });

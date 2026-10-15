@@ -1,9 +1,9 @@
-// Dienstplan-Foto lesen: Bild verkleinern, an Grok (xAI) schicken, Antwort in Schichten übersetzen.
+// Dienstplan-Foto lesen: Bild verkleinern, an Groq schicken, Antwort in Schichten übersetzen.
 import { istDatum, istZeit } from "./logic.js";
 
-// xAI Responses API; grok-4.7 kann Bilder lesen.
-const ENDPUNKT = "https://api.x.ai/v1/responses";
-const MODELL = "grok-4.7";
+// Groq (OpenAI-kompatibel), kostenloser Tarif; qwen3.8-27b ist dort das Modell, das Bilder liest.
+const ENDPUNKT = "https://api.groq.com/openai/v1/chat/completions";
+const MODELL = "qwen/qwen3.8-27b";
 
 const SCHEMA = {
   type: "object",
@@ -47,7 +47,10 @@ Finde die Person „${name}“ und liste jeden Tag, an dem sie laut Plan arbeite
 - Lass Tage ohne Arbeit weg: frei, abwesend, Urlaub, krank, Feiertag, leere Zellen, Striche.
 - roh ist der Zellinhalt genau wie im Bild.
 - Wenn etwas unsicher ist (unscharf, abgeschnitten, schwer zuzuordnen), beschreib es kurz in hinweis, sonst leerer Text.
-${bekannte}`;
+${bekannte}
+
+Antworte nur mit einem JSON-Objekt nach diesem JSON-Schema:
+${JSON.stringify(SCHEMA)}`;
 }
 
 // Fotos vom iPhone sind groß; 2000 px an der langen Kante reichen zum Lesen einer Tabelle.
@@ -80,59 +83,69 @@ export async function analysiereDienstplan({ apiKey, bild, name, heute, kuerzel,
       headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
       body: JSON.stringify({
         model: MODELL,
-        input: [
+        messages: [
           {
             role: "user",
             content: [
-              { type: "input_image", image_url: `data:image/jpeg;base64,${bild}`, detail: "high" },
-              { type: "input_text", text: anweisung(name, heute, kuerzel) },
+              { type: "text", text: anweisung(name, heute, kuerzel) },
+              { type: "image_url", image_url: { url: `data:image/jpeg;base64,${bild}` } },
             ],
           },
         ],
-        text: { format: { type: "json_schema", name: "dienstplan", schema: SCHEMA, strict: true } },
+        response_format: { type: "json_object" },
+        // JSON-Modus verlangt "hidden" oder "parsed"; die Denkschritte brauchen wir nicht.
+        reasoning_format: "hidden",
+        reasoning_effort: "medium",
       }),
       signal,
     });
   } catch (fehler) {
     if (fehler.name === "AbortError") throw new Error("Abgebrochen.");
-    throw new Error("Keine Verbindung zu Grok. Bist du online?");
+    throw new Error("Keine Verbindung zu Groq. Bist du online?");
   }
   const daten = await antwort.json().catch(() => null);
-  if (!antwort.ok) throw new Error(fehlerText(antwort.status, daten?.error?.message ?? daten?.error ?? ""));
-  if (daten?.status && daten.status !== "completed") throw new Error(`Grok hat nicht fertig geantwortet (${daten.status}). Versuch es noch einmal.`);
-  const text = (daten?.output ?? [])
-    .filter((teil) => teil.type === "message")
-    .flatMap((teil) => teil.content ?? [])
-    .filter((inhalt) => inhalt.type === "output_text")
-    .map((inhalt) => inhalt.text)
-    .join("");
+  if (!antwort.ok) throw new Error(fehlerText(antwort.status, daten?.error?.message ?? ""));
+  const wahl = daten?.choices?.[0];
+  if (wahl?.finish_reason === "length") throw new Error("Die Antwort ist unvollständig. Versuch einen kleineren Ausschnitt.");
+  return jsonAusText(wahl?.message?.content ?? "");
+}
+
+// Holt das JSON-Objekt aus der Antwort, auch wenn es in einem Codeblock oder hinter Denktext steht.
+export function jsonAusText(text) {
+  const ohneDenken = text.replace(/<think>[\s\S]*?<\/think>/g, "");
+  const start = ohneDenken.indexOf("{");
+  const ende = ohneDenken.lastIndexOf("}");
   try {
-    return JSON.parse(text);
+    return JSON.parse(ohneDenken.slice(start, ende + 1));
   } catch {
     throw new Error("Die Antwort konnte nicht gelesen werden.");
   }
 }
 
 function fehlerText(status, meldung) {
-  if (status === 401 || (status === 400 && /api.?key/i.test(meldung))) return "Der API-Key ist ungültig.";
-  if (status === 403) return "Der API-Key darf Grok nicht nutzen oder es ist kein Guthaben da (console.x.ai).";
-  if (status === 429) return "Zu viele Anfragen oder Guthaben aufgebraucht. Warte kurz oder prüf dein Guthaben auf console.x.ai.";
-  if (status >= 500) return "Grok ist gerade gestört. Versuch es später noch einmal.";
+  if (status === 401) return "Der API-Key ist ungültig.";
+  if (status === 403) return "Der API-Key darf dieses Modell nicht nutzen (console.groq.com).";
+  if (status === 413) return "Das Foto ist zu groß.";
+  if (status === 429) return "Das kostenlose Limit ist erreicht. Warte eine Minute und versuch es noch einmal.";
+  if (status >= 500) return "Groq ist gerade gestört. Versuch es später noch einmal.";
   return `Anfrage abgelehnt (${status}): ${meldung}`;
 }
 
 // Übersetzt die Antwort in Vorschläge. Nichts wird gespeichert, bevor ich es bestätige.
+const zeit = (t) => (/^\d:\d\d$/.test(String(t ?? "").trim()) ? `0${String(t).trim()}` : String(t ?? "").trim());
+
 export function scanZuSchichten(antwort, einstellungen, vorhandene) {
   const kuerzel = new Map(einstellungen.kuerzel.map((k) => [k.code.trim().toUpperCase(), k]));
   const eintraege = [];
   for (const roh of antwort.name_gefunden ? antwort.schichten ?? [] : []) {
     if (!istDatum(roh.datum)) continue;
     const k = kuerzel.get((roh.kuerzel ?? "").trim().toUpperCase());
-    const zeitenAusPlan = istZeit(roh.beginn) && istZeit(roh.ende);
-    const beginn = zeitenAusPlan ? roh.beginn : k?.beginn ?? "";
-    const ende = zeitenAusPlan ? roh.ende : k?.ende ?? "";
-    const pauseAusPlan = Number.isInteger(roh.pause_min) && roh.pause_min >= 0; // -1 heißt: keine Pause im Plan
-    const pause = pauseAusPlan ? roh.pause_min : k ? k.pause : einstellungen.standardPause;
+    const zeitenAusPlan = istZeit(zeit(roh.beginn)) && istZeit(zeit(roh.ende));
+    const beginn = zeitenAusPlan ? zeit(roh.beginn) : k?.beginn ?? "";
+    const ende = zeitenAusPlan ? zeit(roh.ende) : k?.ende ?? "";
+    const pauseImPlan = roh.pause_min === "" || roh.pause_min == null ? -1 : Number(roh.pause_min);
+    const pauseAusPlan = Number.isInteger(pauseImPlan) && pauseImPlan >= 0; // -1 heißt: keine Pause im Plan
+    const pause = pauseAusPlan ? pauseImPlan : k ? k.pause : einstellungen.standardPause;
     const zeitenOk = istZeit(beginn) && istZeit(ende);
     const doppelt = zeitenOk && vorhandene.some((s) => s.datum === roh.datum && s.beginn === beginn);
     eintraege.push({
