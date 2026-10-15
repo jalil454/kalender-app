@@ -1,0 +1,21 @@
+# Push-Server der Kalender-App (Cloudflare Workers, Gratis-Plan)
+name = "kalender-push"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+
+# Speicher für Push-Abos und Erinnerungen
+[[kv_namespaces]]
+binding = "KV"
+id = "7b69cc915d484114a3423996db880aa9"
+
+# Alle 5 Minuten fällige Erinnerungen verschicken
+[triggers]
+crons = ["*/5 * * * *"]
+
+[vars]
+# Nur diese Adressen dürfen den Server nutzen (App und lokaler Test)
+ERLAUBT = "https://jalil454.github.io,http://localhost:5174"
+# Kontakt für die Push-Dienste (VAPID „sub“)
+KONTAKT = "https://jalil454.github.io/kalender-app/"
+# Öffentlicher VAPID-Schlüssel; der private liegt als Secret VAPID_PRIVAT bei Cloudflare
+VAPID_OEFFENTLICH = "BJqG3wLHDpSEFpLslfHDmzsh8i3yNKDLBRBg5h2Wxaoxk_-mLxB4SDptGf0SiJ4X6rmuK-sws-7qd11TXJn3Yak"

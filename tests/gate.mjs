@@ -10,7 +10,8 @@ if (!/^[a-z]+$/.test(suite)) {
 }
 
 const datei = fileURLToPath(new URL(`./${suite}.test.mjs`, import.meta.url));
-const lauf = spawnSync(process.execPath, ["--test", "--test-reporter=tap", datei], { encoding: "utf8" });
+// Feste Zeitzone, damit Erinnerungszeiten (Sommer-/Winterzeit) auf jedem Rechner gleich geprüft werden.
+const lauf = spawnSync(process.execPath, ["--test", "--test-reporter=tap", datei], { encoding: "utf8", env: { ...process.env, TZ: "Europe/Berlin" } });
 process.stdout.write(lauf.stdout ?? "");
 process.stderr.write(lauf.stderr ?? "");
 

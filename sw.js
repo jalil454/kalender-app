@@ -1,6 +1,6 @@
 // Service Worker: hält die App-Dateien vor, damit die App auch offline startet.
 // Online wird immer zuerst die neueste Version geladen; der Speicher ist nur Ersatz.
-const CACHE = "kalender-v2";
+const CACHE = "kalender-v3";
 const DATEIEN = [
   "./",
   "index.html",
@@ -10,6 +10,7 @@ const DATEIEN = [
   "src/logic.js",
   "src/store.js",
   "src/scan.js",
+  "src/push.js",
   "icons/icon.svg",
   "icons/icon-180.png",
   "icons/icon-192.png",
@@ -46,5 +47,22 @@ self.addEventListener("fetch", (ereignis) => {
         return antwort;
       })
       .catch(() => caches.match(anfrage, { ignoreSearch: true })),
+  );
+});
+
+// Push-Nachricht vom eigenen Server anzeigen (Inhalt: { titel, text }).
+self.addEventListener("push", (ereignis) => {
+  let daten = {};
+  try {
+    daten = ereignis.data?.json() ?? {};
+  } catch {}
+  ereignis.waitUntil(self.registration.showNotification(daten.titel ?? "Kalender", { body: daten.text ?? "", icon: "icons/icon-192.png", badge: "icons/icon-192.png" }));
+});
+
+// Tippen auf die Nachricht öffnet die App.
+self.addEventListener("notificationclick", (ereignis) => {
+  ereignis.notification.close();
+  ereignis.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((fenster) => (fenster[0] ? fenster[0].focus() : self.clients.openWindow("./"))),
   );
 });

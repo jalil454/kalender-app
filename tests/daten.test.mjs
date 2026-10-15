@@ -16,14 +16,16 @@ function beispiel() {
 
 test("Export und Import ergeben dieselben Daten, die API-Keys bleiben die des Geräts", () => {
   const original = beispiel();
-  const zurueck = importiere(exportiere(original), { apiKey: "geraete-key", apiKey2: "geraete-key-2" });
-  assert.deepEqual(zurueck, { ...original, einstellungen: { ...original.einstellungen, apiKey: "geraete-key", apiKey2: "geraete-key-2" } });
+  const geraet = { apiKey: "geraete-key", apiKey2: "geraete-key-2", push: { aktiv: true, geraet: "g1", geheimnis: "geheim-geraet" } };
+  const zurueck = importiere(exportiere(original), geraet);
+  assert.deepEqual(zurueck, { ...original, einstellungen: { ...original.einstellungen, ...geraet } });
 });
 
 test("keiner der API-Keys steht in der Export-Datei", () => {
   const text = exportiere(beispiel());
   assert.equal(text.includes("sk-ant-test-geheim"), false);
   assert.equal(text.includes("sk-or-test-geheim"), false);
+  assert.equal(text.includes("push"), false);
 });
 
 test("kaputtes JSON wird abgelehnt", () => {

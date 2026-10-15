@@ -1,6 +1,7 @@
 // Oberfläche der Kalender-App: zeichnet die Ansichten und verarbeitet Eingaben.
 import * as L from "./logic.js";
 import { laden, speichern, dauerhaftSpeichern } from "./store.js";
+import { abgleichen, ausschalten, einschalten, istHomeBildschirm, istIos, pushEingerichtet, pushMoeglich, testSenden } from "./push.js";
 import { analysiereDienstplan, ausschnittErstellen, automatik, ladeBild, scanZuSchichten, streifen, zweitmeinung } from "./scan.js";
 
 let daten = laden();
@@ -267,6 +268,9 @@ function ansichtEinstellungen() {
     </div>
     <p class="fussnote">Steht im Dienstplan nur „F“ oder „S“, setzt die App die Zeiten von hier ein.</p>
 
+    <h2 class="gruppen-titel">Benachrichtigungen</h2>
+    ${benachrichtigungen(e)}
+
     <h2 class="gruppen-titel">Daten</h2>
     <div class="gruppe">
       <button class="zeile" data-aktion="export"><span class="haupt">Sicherung exportieren</span></button>
@@ -276,6 +280,28 @@ function ansichtEinstellungen() {
     <p class="fussnote">Alle Daten liegen nur in diesem Browser. Füg die App zum Home-Bildschirm hinzu (Teilen, dann „Zum Home-Bildschirm“), damit iOS sie nicht nach längerer Pause löscht, und exportier ab und zu eine Sicherung.</p>
 
     <div class="gruppe abstand-oben"><button class="zeile gefahr" data-aktion="alles-loeschen">Alle Daten löschen</button></div>`;
+}
+
+function benachrichtigungen(e) {
+  if (!pushEingerichtet()) return '<p class="fussnote">Der Server für Benachrichtigungen ist noch nicht eingerichtet.</p>';
+  if (!pushMoeglich()) {
+    const text = istIos() && !istHomeBildschirm() ? "Öffne die App über ihr Symbol auf dem Home-Bildschirm, dann kannst du Benachrichtigungen einschalten (ab iOS 16.4)." : "Dieser Browser kann keine Benachrichtigungen empfangen.";
+    return `<p class="fussnote">${text}</p>`;
+  }
+  const aktiv = e.push.aktiv;
+  return `<div class="gruppe">
+      <button class="zeile" role="switch" aria-checked="${aktiv}" data-aktion="push-umschalten"><span class="haupt">Benachrichtigungen</span><span class="schalter" aria-hidden="true"></span></button>
+      ${aktiv ? '<button class="zeile" data-aktion="push-test"><span class="haupt">Test-Nachricht senden</span></button>' : ""}
+    </div>
+    <p class="fussnote">Schichten 1 Stunde vorher, To-dos um 8:00 am Fälligkeitstag, Abbuchungen am Vortag um 18:00. Der Server bekommt nur diese Erinnerungen (Zeitpunkt und kurzer Text), nicht deine übrigen Daten.</p>`;
+}
+
+// Nach Änderungen die Erinnerungen beim Server aktualisieren (gebündelt, damit nicht jeder Tipp eine Anfrage auslöst).
+let abgleichTimer;
+function abgleichPlanen() {
+  if (!daten.einstellungen.push.aktiv || !pushEingerichtet()) return;
+  clearTimeout(abgleichTimer);
+  abgleichTimer = setTimeout(() => abgleichen(daten).catch(() => zeigeHinweis("Erinnerungen konnten nicht abgeglichen werden")), 2000);
 }
 
 function einstellungAendern(el) {
@@ -784,6 +810,30 @@ const AKTIONEN = {
     $sheet.close();
     sichern();
   },
+  async "push-umschalten"(el) {
+    el.disabled = true;
+    try {
+      if (daten.einstellungen.push.aktiv) {
+        await ausschalten(daten);
+        zeigeHinweis("Benachrichtigungen aus");
+      } else {
+        await einschalten(daten);
+        zeigeHinweis("Benachrichtigungen an");
+      }
+    } catch (fehler) {
+      alert(fehler.message);
+    }
+    speichern(daten);
+    render();
+  },
+  async "push-test"() {
+    try {
+      await testSenden(daten);
+      zeigeHinweis("Test-Nachricht verschickt");
+    } catch (fehler) {
+      alert(fehler.message);
+    }
+  },
   scan: () => sheetScan(),
   markieren: (el, ereignis) => markieren(el, ereignis),
   zoom(el) {
@@ -804,6 +854,7 @@ const AKTIONEN = {
   ics: () => teilenOderLaden(`schichten-${heute}.ics`, L.icsExport(daten.schichten), "text/calendar"),
   "alles-loeschen"() {
     if (!confirm("Alle Schichten, Abos, Ausgaben, To-dos und Einstellungen werden gelöscht. Das lässt sich nicht rückgängig machen.")) return;
+    if (daten.einstellungen.push.aktiv) ausschalten(daten).catch(() => {}); // sonst kämen weiter Erinnerungen
     daten = L.leereDaten();
     sichern();
     zeigeHinweis("Alle Daten gelöscht");
@@ -861,6 +912,7 @@ $sheet.addEventListener("close", () => {
 // Wenn die App über Nacht offen bleibt, springt „heute“ weiter.
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) return;
+  abgleichPlanen(); // Zeitfenster der Erinnerungen nach vorne schieben
   const neu = L.isoVon(new Date());
   if (neu !== heute) {
     heute = neu;
@@ -879,6 +931,7 @@ function zeigeHinweis(text) {
 function sichern() {
   if (!speichern(daten)) zeigeHinweis("Speichern fehlgeschlagen. Ist der Speicher voll?");
   render();
+  abgleichPlanen();
 }
 
 // Nach dem Neuzeichnen bleibt der Fokus auf dem gleichen Bedienelement (wichtig für Tastatur und VoiceOver).
@@ -897,4 +950,5 @@ function render() {
 
 render();
 dauerhaftSpeichern();
+abgleichPlanen();
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});

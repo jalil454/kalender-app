@@ -12,6 +12,7 @@
   --akzent-text: #ffffff;
   --warnung: #b3362b;
   --abdunkeln: rgb(0 0 0 / 0.32);
+  --schalter-aus: #ffffff;
   --schatten: 0 1px 2px rgb(0 0 0 / 0.06), 0 6px 20px rgb(0 0 0 / 0.08);
 
   --a1: 4px;
@@ -39,6 +40,7 @@
     --akzent-text: #111110;
     --warnung: #f0897a;
     --abdunkeln: rgb(0 0 0 / 0.6);
+    --schalter-aus: #a19f9a;
     --schatten: 0 1px 2px rgb(0 0 0 / 0.5), 0 6px 20px rgb(0 0 0 / 0.5);
   }
 }
@@ -297,6 +299,39 @@ label.zeile:active,
 
 .zeile.aktion > svg {
   color: inherit;
+}
+
+/* iOS-Schalter: aus = grau mit hellem Knopf, an = Akzentfarbe */
+.schalter {
+  position: relative;
+  flex: none;
+  width: 51px;
+  height: 31px;
+  border-radius: 999px;
+  background: var(--flaeche-2);
+  transition: background 0.2s;
+}
+
+.schalter::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 27px;
+  height: 27px;
+  border-radius: 50%;
+  background: var(--schalter-aus);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.25);
+  transition: transform 0.2s;
+}
+
+[aria-checked="true"] > .schalter {
+  background: var(--akzent);
+}
+
+[aria-checked="true"] > .schalter::after {
+  background: var(--akzent-text);
+  transform: translateX(20px);
 }
 
 .zeile.gefahr {

@@ -143,6 +143,39 @@ export function prognose(daten, bis) {
   return { start: k.betrag, von: k.datum, bis, buchungen: liste, ende: stand };
 }
 
+// ---------- Erinnerungen für Push-Nachrichten ----------
+
+// Ortszeit dieses Geräts als Date (für den Server wird daraus UTC).
+function ortszeit(datum, zeit) {
+  const [j, m, t] = datum.split("-").map(Number);
+  const [h, mi] = zeit.split(":").map(Number);
+  return new Date(j, m - 1, t, h, mi);
+}
+
+// Alle Erinnerungen der nächsten Tage. Die id ändert sich, wenn sich Datum oder Uhrzeit ändern,
+// damit der Server eine verschobene Schicht neu erinnert.
+export function erinnerungen(daten, jetzt, tage = 60) {
+  const bis = new Date(jetzt.getTime() + tage * 864e5);
+  const liste = [];
+  const neu = (id, zeitpunkt, titel, inhalt) => {
+    if (zeitpunkt > jetzt && zeitpunkt <= bis) liste.push({ id, zeit: zeitpunkt.toISOString(), titel, text: inhalt });
+  };
+  for (const s of daten.schichten) {
+    const vorher = new Date(ortszeit(s.datum, s.beginn).getTime() - 60 * 6e4);
+    neu(`s:${s.id}:${s.datum}:${s.beginn}`, vorher, "Schicht in 1 Stunde", `${s.beginn}–${s.ende}${s.notiz ? ` · ${s.notiz}` : ""}`);
+  }
+  for (const t of daten.todos) {
+    if (!t.erledigt && t.faellig) neu(`t:${t.id}:${t.faellig}`, ortszeit(t.faellig, "08:00"), "To-do fällig heute", t.projekt ? `${t.text} · ${t.projekt}` : t.text);
+  }
+  for (let monat = monatVon(isoVon(jetzt)); monat <= monatVon(isoVon(bis)); monat = monatPlus(monat, 1)) {
+    for (const a of daten.abos) {
+      const termin = aboTermin(a, monat);
+      if (termin) neu(`a:${a.id}:${termin}`, ortszeit(datumPlusTage(termin, -1), "18:00"), "Abbuchung morgen", `${a.name} · ${formatGeld(a.betrag)}`);
+    }
+  }
+  return liste.sort((a, b) => a.zeit.localeCompare(b.zeit)).slice(0, 300);
+}
+
 // ---------- Formatieren und Eingaben ----------
 
 const GELD = new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR" });
@@ -168,7 +201,7 @@ export function euroZuCent(text) {
 export function leereDaten() {
   return {
     version: VERSION,
-    einstellungen: { stundenlohn: 0, standardPause: 30, zahltag: 15, zahlungImFolgemonat: true, name: "", kuerzel: [], apiKey: "", apiKey2: "" },
+    einstellungen: { stundenlohn: 0, standardPause: 30, zahltag: 15, zahlungImFolgemonat: true, name: "", kuerzel: [], apiKey: "", apiKey2: "", push: { aktiv: false, geraet: "", geheimnis: "" } },
     schichten: [],
     abos: [],
     ausgaben: [],
@@ -204,14 +237,14 @@ export function pruefeDaten(d) {
   pruefe(d.kontostand === null || (ganzeZahl(d.kontostand.betrag) && istDatum(d.kontostand.datum)), "Kontostand ist ungültig.");
 }
 
-// API-Keys werden nie exportiert.
+// API-Keys und die Push-Anmeldung gehören zu diesem Gerät und werden nie exportiert.
 export function exportiere(daten) {
-  const { apiKey, apiKey2, ...einstellungen } = daten.einstellungen;
+  const { apiKey, apiKey2, push, ...einstellungen } = daten.einstellungen;
   return JSON.stringify({ ...daten, einstellungen }, null, 2);
 }
 
-// Beim Import bleiben die Keys dieses Geräts erhalten.
-export function importiere(inhalt, { apiKey = "", apiKey2 = "" } = {}) {
+// Beim Import bleiben Keys und Push-Anmeldung dieses Geräts erhalten.
+export function importiere(inhalt, { apiKey = "", apiKey2 = "", push = leereDaten().einstellungen.push } = {}) {
   let d;
   try {
     d = JSON.parse(inhalt);
@@ -219,7 +252,7 @@ export function importiere(inhalt, { apiKey = "", apiKey2 = "" } = {}) {
     throw new Error("Die Datei ist kein gültiges JSON.");
   }
   pruefeDaten(d);
-  return { ...d, einstellungen: { ...d.einstellungen, apiKey, apiKey2 } };
+  return { ...d, einstellungen: { ...d.einstellungen, apiKey, apiKey2, push } };
 }
 
 // ---------- Kalender-Export (.ics) ----------

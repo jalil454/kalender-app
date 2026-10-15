@@ -1,0 +1,12 @@
+{
+  "name": "kalender-push",
+  "private": true,
+  "type": "module",
+  "description": "Push-Server für die Kalender-App (Cloudflare Worker)",
+  "scripts": {
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "4.151.0"
+  }
+}
