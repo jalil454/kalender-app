@@ -39,6 +39,7 @@ function anweisung(name, heute, kuerzel) {
 Finde die Person „${name}“ und liste jeden Tag, an dem sie laut Plan arbeitet.
 
 - Der Name kann anders geschrieben sein: nur Nachname, „Nachname, Vorname“, Initialen oder ein Kürzel. Nimm die Zeile oder Spalte, die eindeutig passt, und schreib die Schreibweise aus dem Plan in name_im_plan. Passt keine eindeutig, setz name_gefunden auf false und lass schichten leer.
+- Die Tabelle kann schief fotografiert sein. Folge der Zeile der Person an den Linien entlang über alle Spalten, damit du nicht in die Zeile darüber oder darunter rutschst.
 - Lies das Datum aus den Kopfzeilen oder Kopfspalten. Ein zweistelliges Jahr wie „26“ heißt 2026. Fehlt das Jahr, nimm das Jahr, das am nächsten an heute liegt. Format JJJJ-MM-TT.
 - Steht eine Uhrzeit da (zum Beispiel „8-16:30“ oder „08:00–16:30“), schreib beginn und ende als HH:MM.
 - Steht nur ein Kürzel da (zum Beispiel „F“, „S“, „N“), schreib es in kuerzel und lass beginn und ende leer. Steht ein Kürzel oder Bereich vor einer Uhrzeit (zum Beispiel „KA 16:00-18:00“), schreib das Kürzel in kuerzel und die Zeiten in beginn und ende.
