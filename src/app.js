@@ -6,7 +6,7 @@ import { analysiereDienstplan, ausschnittErstellen, automatik, ladeBild, scanZuS
 
 let daten = laden();
 let heute = L.isoVon(new Date());
-const ui = { tab: "kalender", einstellungen: false, monat: L.monatVon(heute), tag: heute, geldMonat: L.monatVon(heute) };
+const ui = { tab: "kalender", einstellungen: false, monat: L.monatVon(heute), tag: heute, geldMonat: L.monatVon(heute), todoAnsicht: "alle", todoSuche: "" };
 let scan = null; // Zustand der Foto-Analyse, solange das Sheet offen ist
 
 const $app = document.getElementById("app");
@@ -62,6 +62,8 @@ const ICON = {
   zurueck: svg('<path d="M15 5l-7 7 7 7"/>'),
   vor: svg('<path d="M9 5l7 7-7 7"/>'),
   haken: svg('<path d="M5 12.5l4.5 4.5L19 7.5"/>'),
+  lupe: svg('<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/>'),
+  x: svg('<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>'),
 };
 
 // ---------- Bausteine ----------
@@ -207,25 +209,86 @@ function ansichtGeld() {
 
 // ---------- To-dos ----------
 
-function todoZeile(t) {
-  const ueberfaellig = !t.erledigt && t.faellig && t.faellig < heute;
-  const unter = t.faellig ? `<span class="unter${ueberfaellig ? " achtung" : ""}">${ueberfaellig ? "überfällig seit" : "fällig"} ${datumMittel(t.faellig)}</span>` : "";
-  return `<div class="zeile${t.erledigt ? " erledigt" : ""}"><button class="haken" role="checkbox" aria-checked="${t.erledigt}" aria-label="Erledigt: ${esc(t.text)}" data-aktion="todo-umschalten" data-id="${t.id}"><span>${t.erledigt ? ICON.haken : ""}</span></button><button class="haupt zeilen-text" data-aktion="todo-bearbeiten" data-id="${t.id}"><span class="titel">${esc(t.text)}</span>${unter}</button></div>`;
+const ANSICHTEN = { alle: "Alle", heute: "Heute", woche: "Woche", ueberfaellig: "Überfällig" };
+
+function todoUnterzeile(t, projektZeigen) {
+  const teile = [];
+  if (t.faellig) {
+    const ueberfaellig = !t.erledigt && t.faellig < heute;
+    const wann = t.faellig === heute ? "heute" : t.faellig === L.datumPlusTage(heute, 1) ? "morgen" : datumMittel(t.faellig);
+    const text = ueberfaellig ? `überfällig seit ${datumMittel(t.faellig)}` : `fällig ${wann}`;
+    teile.push(`<span${ueberfaellig ? ' class="achtung"' : ""}>${text}${t.uhrzeit ? `, ${t.uhrzeit}` : ""}</span>`);
+  }
+  if (t.wiederholung) teile.push(L.WIEDERHOLUNGEN[t.wiederholung]);
+  if (t.unteraufgaben.length) teile.push(`${t.unteraufgaben.filter((u) => u.erledigt).length}/${t.unteraufgaben.length} erledigt`);
+  if (t.notiz) teile.push("Notiz");
+  if (projektZeigen && t.projekt) teile.push(esc(t.projekt));
+  return teile.length ? `<span class="unter">${teile.join(" · ")}</span>` : "";
 }
 
-function ansichtTodos() {
+// Eine Zeile lässt sich wischen: nach rechts erledigt, nach links löschen. Tippen öffnet sie.
+function todoZeile(t, { projektZeigen = false } = {}) {
+  const wichtig = t.prioritaet === 2 ? '<span class="prio" aria-label="wichtig">!!</span> ' : "";
+  const morgen = !t.erledigt && t.faellig && t.faellig <= heute ? `<button class="text-knopf klein-knopf" data-aktion="todo-morgen" data-id="${t.id}" aria-label="${esc(t.text)} auf morgen verschieben">Morgen</button>` : "";
+  return `<div class="wisch" data-wisch data-id="${t.id}">
+    <div class="wisch-hinten" aria-hidden="true"><span>${t.erledigt ? "Wieder offen" : "Erledigt"}</span><span>Löschen</span></div>
+    <div class="zeile wisch-vorne${t.erledigt ? " erledigt" : ""}${t.prioritaet === 0 ? " niedrig" : ""}">
+      <button class="haken" role="checkbox" aria-checked="${t.erledigt}" aria-label="Erledigt: ${esc(t.text)}" data-aktion="todo-umschalten" data-id="${t.id}"><span>${t.erledigt ? ICON.haken : ""}</span></button>
+      <button class="haupt zeilen-text" data-aktion="todo-bearbeiten" data-id="${t.id}"><span class="titel">${wichtig}${esc(t.text)}</span>${todoUnterzeile(t, projektZeigen)}</button>
+      ${morgen}
+    </div>
+  </div>`;
+}
+
+function todoListe() {
+  const suche = ui.todoSuche.trim();
+  if (suche) {
+    const treffer = L.todosSortieren(L.todosSuchen(daten.todos, suche));
+    if (!treffer.length) return '<p class="leer">Nichts gefunden.</p>';
+    return `<h2 class="gruppen-titel">${treffer.length === 1 ? "1 Treffer" : `${treffer.length} Treffer`}</h2><div class="gruppe">${treffer.map((t) => todoZeile(t, { projektZeigen: true })).join("")}</div>`;
+  }
+  if (ui.todoAnsicht !== "alle") {
+    const liste = L.todosSortieren(L.todosFiltern(daten.todos, ui.todoAnsicht, heute));
+    const leer = { heute: "Heute ist nichts fällig.", woche: "Diese Woche ist nichts mehr fällig.", ueberfaellig: "Nichts überfällig." }[ui.todoAnsicht];
+    return liste.length ? `<div class="gruppe abstand-oben">${liste.map((t) => todoZeile(t, { projektZeigen: true })).join("")}</div>` : `<p class="leer">${leer}</p>`;
+  }
   const offen = daten.todos.filter((t) => !t.erledigt);
   const erledigt = daten.todos.filter((t) => t.erledigt);
   const projekte = [...new Set(offen.map((t) => t.projekt))].sort((a, b) => (a === "") - (b === "") || a.localeCompare(b, "de"));
-  const nachFaelligkeit = (a, b) => (a.faellig || "9999").localeCompare(b.faellig || "9999");
   const gruppen = projekte
-    .map((p) => `<h2 class="gruppen-titel">${esc(p || "Ohne Projekt")}</h2><div class="gruppe">${offen.filter((t) => t.projekt === p).sort(nachFaelligkeit).map(todoZeile).join("")}</div>`)
+    .map((p) => {
+      const f = L.projektFortschritt(daten.todos, p);
+      const kopf = p
+        ? `<button class="gruppen-titel projekt-kopf" data-aktion="projekt-bearbeiten" data-projekt="${esc(p)}" aria-label="Projekt ${esc(p)} bearbeiten, ${f.erledigt} von ${f.gesamt} erledigt"><span>${esc(p)}</span><span>${f.erledigt}/${f.gesamt}</span></button>`
+        : '<h2 class="gruppen-titel">Ohne Projekt</h2>';
+      return `${kopf}<div class="gruppe">${L.todosSortieren(offen.filter((t) => t.projekt === p)).map((t) => todoZeile(t)).join("")}</div>`;
+    })
+    .join("");
+  return `${gruppen || '<p class="leer">Nichts offen. Neue Aufgaben legst du mit dem Plus oben rechts an.</p>'}
+    ${erledigt.length ? `<details class="erledigt-block"><summary class="gruppen-titel">Erledigt (${erledigt.length})</summary><div class="gruppe">${erledigt.map((t) => todoZeile(t)).join("")}</div></details>` : ""}`;
+}
+
+function ansichtTodos() {
+  const ansichten = Object.entries(ANSICHTEN)
+    .map(([a, name]) => {
+      const anzahl = a === "alle" ? 0 : L.todosFiltern(daten.todos, a, heute).length;
+      return `<button type="button" role="tab" aria-selected="${a === ui.todoAnsicht}" data-aktion="todo-ansicht" data-ansicht="${a}">${name}${anzahl ? ` <span class="anzahl">${anzahl}</span>` : ""}</button>`;
+    })
     .join("");
   return `
     ${navbar("", `<button class="icon-knopf" data-aktion="todo-neu" aria-label="Neues To-do">${ICON.plus}</button>${knopfEinstellungen()}`)}
     <div class="titelzeile"><h1>To-dos</h1></div>
-    ${gruppen || '<p class="leer">Nichts offen. Neue Aufgaben legst du mit dem Plus oben rechts an.</p>'}
-    ${erledigt.length ? `<details class="erledigt-block"><summary class="gruppen-titel">Erledigt (${erledigt.length})</summary><div class="gruppe">${erledigt.map(todoZeile).join("")}</div></details>` : ""}`;
+    <label class="suche">${ICON.lupe}<input type="search" data-todo-suche placeholder="Suchen" value="${esc(ui.todoSuche)}" aria-label="To-dos durchsuchen" enterkeyhint="search" autocomplete="off"><button type="button" class="suche-leeren" data-aktion="suche-leeren" aria-label="Suche leeren">${ICON.x}</button></label>
+    <div class="ansichten" role="tablist" aria-label="Ansicht">${ansichten}</div>
+    <div data-todo-liste>${todoListe()}</div>`;
+}
+
+function todoUmschalten(id) {
+  const i = daten.todos.findIndex((t) => t.id === id);
+  const vorher = daten.todos[i];
+  daten.todos[i] = L.todoAbhaken(vorher, heute);
+  if (vorher.wiederholung && !vorher.erledigt) zeigeHinweis(`Nächstes Mal: ${datumMittel(daten.todos[i].faellig)}`);
+  sichern();
 }
 
 // ---------- Einstellungen ----------
@@ -425,19 +488,59 @@ function sheetKontostand() {
   );
 }
 
+const unterZeile = (u = { id: "", text: "", erledigt: false }) =>
+  `<div class="zeile unter-zeile" data-unteraufgabe data-id="${u.id}"><label class="auswahl-ziel"><input type="checkbox" class="auswahl"${u.erledigt ? " checked" : ""} aria-label="Unteraufgabe erledigt"></label><input type="text" class="unter-text" maxlength="200" placeholder="Unteraufgabe" value="${esc(u.text)}" aria-label="Unteraufgabe"><button type="button" class="icon-knopf" data-aktion="unteraufgabe-weg" aria-label="Unteraufgabe entfernen">${ICON.x}</button></div>`;
+
 function sheetTodo(t) {
-  const w = t ?? { text: "", projekt: "", faellig: "" };
+  const w = t ?? L.todoMitStandard({ text: "", projekt: "", faellig: "", erledigt: false });
   const projekte = [...new Set(daten.todos.map((x) => x.projekt).filter(Boolean))];
+  const schnell = [["heute", "Heute"], ["morgen", "Morgen"], ["naechsteWoche", "Nächste Woche"], ["kein", "Kein Datum"]]
+    .map(([art, name]) => `<button type="button" class="chip" data-aktion="todo-datum" data-art="${art}">${name}</button>`)
+    .join("");
+  const wiederholung = Object.entries(L.WIEDERHOLUNGEN).map(([wert, name]) => `<option value="${wert}"${wert === w.wiederholung ? " selected" : ""}>${name}</option>`).join("");
+  const prioritaet = [[0, "Niedrig"], [1, "Normal"], [2, "Hoch"]]
+    .map(([wert, name]) => `<label><input type="radio" name="prioritaet" value="${wert}"${wert === w.prioritaet ? " checked" : ""}>${name}</label>`)
+    .join("");
   oeffneSheet(
     t ? "To-do" : "Neues To-do",
     `<div class="gruppe">
       ${feld("Aufgabe", `<input name="text" required maxlength="200" placeholder="Was ist zu tun?" value="${esc(w.text)}">`, "", true)}
       ${feld("Projekt", `<input name="projekt" list="projekte" maxlength="60" placeholder="optional" value="${esc(w.projekt)}">`, "", true)}
-      ${feld("Fällig am", `<input type="date" name="faellig" value="${w.faellig}">`)}
     </div>
     <datalist id="projekte">${projekte.map((p) => `<option value="${esc(p)}">`).join("")}</datalist>
+
+    <h2 class="gruppen-titel">Wann</h2>
+    <div class="gruppe">
+      ${feld("Fällig am", `<input type="date" name="faellig" value="${w.faellig}">`)}
+      ${feld("Uhrzeit", `<input type="time" name="uhrzeit" value="${w.uhrzeit}">`)}
+      ${feld("Wiederholen", `<select name="wiederholung">${wiederholung}</select>`)}
+    </div>
+    <div class="chips">${schnell}</div>
+    <p class="fussnote">Mit Uhrzeit kommt die Erinnerung genau dann, sonst um 8:00 am Fälligkeitstag.</p>
+
+    <h2 class="gruppen-titel">Priorität</h2>
+    <div class="segment">${prioritaet}</div>
+
+    <h2 class="gruppen-titel">Unteraufgaben</h2>
+    <div class="gruppe" data-unteraufgaben>
+      ${w.unteraufgaben.map(unterZeile).join("")}
+      ${neuZeile("unteraufgabe-neu", "Unteraufgabe hinzufügen").replace("<button", '<button type="button"')}
+    </div>
+
+    <h2 class="gruppen-titel">Notiz</h2>
+    <div class="gruppe"><textarea class="notiz" name="notiz" maxlength="2000" rows="4" placeholder="Details, Links, Fehlermeldungen …" aria-label="Notiz">${esc(w.notiz)}</textarea></div>
     ${t ? loeschKnopf("todo-loeschen", t.id, "To-do löschen") : ""}`,
     { form: "todo", id: t?.id },
+  );
+}
+
+function sheetProjekt(name) {
+  const f = L.projektFortschritt(daten.todos, name);
+  oeffneSheet(
+    "Projekt",
+    `<div class="gruppe">${feld("Name", `<input name="name" required maxlength="60" value="${esc(name)}">`, "", true)}</div>
+    <p class="fussnote">${f.erledigt} von ${f.gesamt} To-dos erledigt. Beim Umbenennen ändern sich alle To-dos dieses Projekts.</p>`,
+    { form: "projekt", id: name },
   );
 }
 
@@ -484,9 +587,34 @@ const SPEICHERN = {
     if (betrag === null) return ungueltig(f.elements.betrag, "Bitte als Betrag eingeben, z. B. 1.234,56 oder -50");
     daten.kontostand = { betrag, datum: w.datum };
   },
-  todo(w, id) {
+  todo(w, id, f) {
     const alt = id ? finde(daten.todos, id) : null;
-    ersetzeOderNeu(daten.todos, { id: id || neueId(), text: w.text.trim(), projekt: w.projekt.trim(), faellig: w.faellig, erledigt: alt?.erledigt ?? false });
+    const faellig = w.faellig || (w.wiederholung ? heute : ""); // Wiederholung braucht einen Starttermin
+    if (w.uhrzeit && !faellig) return ungueltig(f.elements.faellig, "Für eine Uhrzeit brauchst du ein Datum.");
+    const unteraufgaben = [...f.querySelectorAll("[data-unteraufgabe]")]
+      .map((z) => ({ id: z.dataset.id || neueId(), text: z.querySelector(".unter-text").value.trim(), erledigt: z.querySelector(".auswahl").checked }))
+      .filter((u) => u.text);
+    ersetzeOderNeu(
+      daten.todos,
+      L.todoMitStandard({
+        id: id || neueId(),
+        text: w.text.trim(),
+        projekt: w.projekt.trim(),
+        faellig,
+        uhrzeit: w.uhrzeit || "",
+        erledigt: alt?.erledigt ?? false,
+        notiz: w.notiz.trim(),
+        prioritaet: Number(w.prioritaet ?? 1),
+        unteraufgaben,
+        wiederholung: w.wiederholung,
+        ankerTag: w.wiederholung === "monatlich" ? Number(faellig.slice(8, 10)) : 0, // „jeden 31.“ bleibt der 31.
+      }),
+    );
+  },
+  projekt(w, alt, f) {
+    const neu = w.name.trim();
+    if (!neu) return ungueltig(f.elements.name, "Bitte einen Namen eingeben.");
+    daten.todos = L.projektUmbenennen(daten.todos, alt, neu);
   },
   kuerzel(w, id, f) {
     const liste = daten.einstellungen.kuerzel;
@@ -797,11 +925,32 @@ const AKTIONEN = {
   "todo-neu": () => sheetTodo(),
   "todo-bearbeiten": (el) => sheetTodo(finde(daten.todos, el.dataset.id)),
   "todo-loeschen": (el) => loeschen("todos", el.dataset.id, "Dieses To-do löschen?"),
-  "todo-umschalten"(el) {
-    const t = finde(daten.todos, el.dataset.id);
-    t.erledigt = !t.erledigt;
+  "todo-umschalten": (el) => todoUmschalten(el.dataset.id),
+  "todo-morgen"(el) {
+    finde(daten.todos, el.dataset.id).faellig = L.verschiebeZiel("morgen", heute);
+    zeigeHinweis("Auf morgen verschoben");
     sichern();
   },
+  "suche-leeren"() {
+    ui.todoSuche = "";
+    const feld = document.querySelector("[data-todo-suche]");
+    feld.value = "";
+    feld.focus();
+    document.querySelector("[data-todo-liste]").innerHTML = todoListe();
+  },
+  "todo-ansicht"(el) {
+    ui.todoAnsicht = el.dataset.ansicht;
+    render();
+  },
+  "todo-datum"(el) {
+    el.form.elements.faellig.value = L.verschiebeZiel(el.dataset.art, heute);
+  },
+  "unteraufgabe-neu"(el) {
+    el.insertAdjacentHTML("beforebegin", unterZeile());
+    el.previousElementSibling.querySelector(".unter-text").focus();
+  },
+  "unteraufgabe-weg": (el) => el.closest("[data-unteraufgabe]").remove(),
+  "projekt-bearbeiten": (el) => sheetProjekt(el.dataset.projekt),
   "kuerzel-neu": () => sheetKuerzel(),
   "kuerzel-bearbeiten": (el) => sheetKuerzel(Number(el.dataset.index)),
   "kuerzel-loeschen"(el) {
@@ -865,6 +1014,59 @@ document.addEventListener("click", (ereignis) => {
   const el = ereignis.target.closest("[data-aktion]");
   if (el && AKTIONEN[el.dataset.aktion]) AKTIONEN[el.dataset.aktion](el, ereignis);
 });
+
+document.addEventListener("input", (ereignis) => {
+  if (!ereignis.target.matches("[data-todo-suche]")) return;
+  ui.todoSuche = ereignis.target.value;
+  document.querySelector("[data-todo-liste]").innerHTML = todoListe();
+});
+
+// Wischen auf To-do-Zeilen: rechts = erledigt, links = löschen. Senkrechtes Scrollen bleibt normal.
+let wisch = null;
+let klickSperre = false;
+document.addEventListener("pointerdown", (ereignis) => {
+  const vorne = ereignis.target.closest(".wisch-vorne");
+  if (!vorne || (ereignis.pointerType === "mouse" && ereignis.button !== 0)) return;
+  wisch = { vorne, x: ereignis.clientX, y: ereignis.clientY, dx: 0, aktiv: false, id: vorne.parentElement.dataset.id };
+});
+document.addEventListener("pointermove", (ereignis) => {
+  if (!wisch) return;
+  const dx = ereignis.clientX - wisch.x;
+  const dy = ereignis.clientY - wisch.y;
+  if (!wisch.aktiv) {
+    if (Math.abs(dy) > 10) return void (wisch = null);
+    if (Math.abs(dx) < 10) return;
+    wisch.aktiv = true;
+    wisch.vorne.style.transition = "none";
+  }
+  wisch.dx = dx;
+  wisch.vorne.style.transform = `translateX(${dx}px)`;
+  wisch.vorne.parentElement.dataset.richtung = dx > 0 ? "rechts" : "links";
+});
+function wischEnde() {
+  if (!wisch) return;
+  const { vorne, dx, aktiv, id } = wisch;
+  wisch = null;
+  vorne.style.transition = "";
+  vorne.style.transform = "";
+  if (!aktiv) return;
+  klickSperre = true; // der Klick nach dem Wischen soll das To-do nicht öffnen
+  setTimeout(() => (klickSperre = false), 400);
+  if (dx > 80) todoUmschalten(id);
+  else if (dx < -80) loeschen("todos", id, "Dieses To-do löschen?");
+}
+document.addEventListener("pointerup", wischEnde);
+document.addEventListener("pointercancel", wischEnde);
+document.addEventListener(
+  "click",
+  (ereignis) => {
+    if (!klickSperre) return;
+    klickSperre = false;
+    ereignis.stopPropagation();
+    ereignis.preventDefault();
+  },
+  true,
+);
 
 document.addEventListener("change", (ereignis) => {
   const el = ereignis.target;

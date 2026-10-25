@@ -13,6 +13,7 @@
   --warnung: #b3362b;
   --abdunkeln: rgb(0 0 0 / 0.32);
   --schalter-aus: #ffffff;
+  --warnung-text: #ffffff;
   --schatten: 0 1px 2px rgb(0 0 0 / 0.06), 0 6px 20px rgb(0 0 0 / 0.08);
 
   --a1: 4px;
@@ -41,6 +42,7 @@
     --warnung: #f0897a;
     --abdunkeln: rgb(0 0 0 / 0.6);
     --schalter-aus: #a19f9a;
+    --warnung-text: #111110;
     --schatten: 0 1px 2px rgb(0 0 0 / 0.5), 0 6px 20px rgb(0 0 0 / 0.5);
   }
 }
@@ -535,6 +537,232 @@ label.zeile:active,
 
 .erledigt-block[open] > summary::after {
   transform: rotate(45deg);
+}
+
+/* ---------- To-dos: Suche, Ansichten, Wischen ---------- */
+
+.suche {
+  display: flex;
+  align-items: center;
+  gap: var(--a2);
+  min-height: 40px;
+  margin-bottom: var(--a3);
+  padding: 0 var(--a3);
+  border-radius: 10px;
+  background: var(--flaeche-2);
+  color: var(--text-2);
+}
+
+.suche svg {
+  width: 18px;
+  height: 18px;
+}
+
+.suche input {
+  flex: 1;
+  min-width: 0;
+  min-height: 40px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+}
+
+.suche input:focus {
+  outline: none;
+}
+
+/* Eigenes Leeren-Kreuz statt des blauen aus dem Browser */
+.suche input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.suche-leeren {
+  display: grid;
+  place-items: center;
+  width: var(--ziel);
+  height: 40px;
+  margin-right: calc(-1 * var(--a3));
+  color: var(--text-2);
+}
+
+.suche input:placeholder-shown + .suche-leeren {
+  display: none;
+}
+
+.suche:focus-within {
+  outline: 2px solid var(--text);
+}
+
+.ansichten {
+  display: grid;
+  grid-template-columns: repeat(4, auto);
+  padding: 2px;
+  border-radius: 9px;
+  background: var(--flaeche-2);
+}
+
+.ansichten button {
+  min-height: 34px;
+  text-align: center;
+  padding: 0 var(--a1);
+  border-radius: 7px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.ansichten button[aria-selected="true"] {
+  background: var(--flaeche);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.12);
+}
+
+.anzahl {
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.projekt-kopf {
+  display: flex;
+  justify-content: space-between;
+  width: calc(100% - 2 * var(--a4));
+  min-height: var(--ziel);
+  margin-top: 4px; /* 44 px Tippfläche, Text sitzt auf gleicher Höhe wie bei „Ohne Projekt“ */
+  margin-bottom: 0;
+  align-items: flex-end;
+  padding-bottom: var(--a2);
+}
+
+.prio {
+  color: var(--warnung);
+  font-weight: 700;
+}
+
+.niedrig .titel {
+  color: var(--text-2);
+}
+
+.klein-knopf {
+  flex: none;
+  margin-right: calc(-1 * var(--a2));
+  font-size: 0.875rem;
+  color: var(--text-2);
+}
+
+.wisch {
+  position: relative;
+  overflow: hidden;
+}
+
+.wisch + .wisch > .wisch-vorne::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: var(--a4);
+  right: 0;
+  border-top: 0.5px solid var(--linie);
+}
+
+.wisch-hinten {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--a5);
+  font-weight: 600;
+}
+
+.wisch-hinten > span {
+  visibility: hidden;
+}
+
+[data-richtung="rechts"] > .wisch-hinten {
+  background: var(--akzent);
+  color: var(--akzent-text);
+}
+
+[data-richtung="rechts"] > .wisch-hinten > span:first-child,
+[data-richtung="links"] > .wisch-hinten > span:last-child {
+  visibility: visible;
+}
+
+[data-richtung="links"] > .wisch-hinten {
+  background: var(--warnung);
+  color: var(--warnung-text);
+}
+
+.wisch-vorne {
+  background: var(--flaeche);
+  touch-action: pan-y;
+  transition: transform 0.2s;
+}
+
+/* To-do-Formular */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--a2);
+  margin: var(--a3) 0 0;
+}
+
+.chip {
+  min-height: 36px;
+  padding: 0 var(--a3);
+  border-radius: 999px;
+  background: var(--flaeche);
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.chip:active {
+  background: var(--flaeche-2);
+}
+
+.unter-zeile {
+  gap: var(--a1);
+}
+
+.unter-text {
+  flex: 1;
+  min-width: 0;
+  min-height: var(--ziel);
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+}
+
+.unter-text:focus {
+  outline: none;
+}
+
+.unter-zeile .icon-knopf {
+  margin-right: calc(-1 * var(--a3));
+  color: var(--text-2);
+}
+
+.unter-zeile .icon-knopf svg {
+  width: 18px;
+  height: 18px;
+}
+
+textarea.notiz {
+  display: block;
+  width: 100%;
+  min-height: 96px;
+  padding: var(--a3) var(--a4);
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  resize: vertical;
+}
+
+textarea.notiz:focus {
+  outline: 2px solid var(--text);
+  outline-offset: -2px;
 }
 
 /* ---------- Tab-Leiste: schwebend, deckend (kein Glas-Effekt) ---------- */

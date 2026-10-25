@@ -10,7 +10,9 @@ function beispiel() {
   d.abos = [{ id: "a1", name: "Streaming", betrag: 999, tag: 20, rhythmus: 1, abMonat: "2026-01", bisMonat: "" }];
   d.ausgaben = [{ id: "e1", name: "Schuhe", betrag: 5995, datum: "2026-10-20" }];
   d.kontostand = { betrag: -1250, datum: "2026-10-14" };
-  d.todos = [{ id: "t1", text: "Login reparieren", projekt: "Trad tracker", faellig: "2026-10-30", erledigt: false }];
+  d.todos = [
+    { id: "t1", text: "Login reparieren", projekt: "Trad tracker", faellig: "2026-10-30", erledigt: false, notiz: "Fehler 500 beim Anmelden", uhrzeit: "15:00", prioritaet: 2, unteraufgaben: [{ id: "u1", text: "Logs prüfen", erledigt: true }], wiederholung: "woechentlich", ankerTag: 0 },
+  ];
   return d;
 }
 

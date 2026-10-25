@@ -51,6 +51,8 @@ const PAARE = [
   ["akzent-text", "akzent", 4.5],
   ["warnung", "bg", 4.5],
   ["warnung", "flaeche", 4.5],
+  ["warnung-text", "warnung", 4.5], // „Löschen“ beim Wischen
+  ["akzent-text", "akzent", 4.5], // „Erledigt“ beim Wischen
   ["akzent", "bg", 3],
   ["akzent", "flaeche", 3],
   ["text-2", "flaeche", 3], // Rand der To-do-Kreise

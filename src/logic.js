@@ -143,6 +143,90 @@ export function prognose(daten, bis) {
   return { start: k.betrag, von: k.datum, bis, buchungen: liste, ende: stand };
 }
 
+// ---------- To-dos ----------
+
+export const PRIORITAETEN = { 2: "hoch", 1: "normal", 0: "niedrig" };
+export const WIEDERHOLUNGEN = { "": "nie", taeglich: "täglich", woechentlich: "wöchentlich", monatlich: "monatlich" };
+
+// Felder, die neuere Versionen der App kennen; ältere To-dos bekommen die Standardwerte.
+// ankerTag: Tag im Monat für monatliche Wiederholung (0 = Tag des Fälligkeitsdatums).
+export function todoMitStandard(t) {
+  return { notiz: "", uhrzeit: "", prioritaet: 1, unteraufgaben: [], wiederholung: "", ankerTag: 0, ...t };
+}
+
+export function wochentag(datum) {
+  const [j, m, t] = datum.split("-").map(Number);
+  return (new Date(j, m - 1, t).getDay() + 6) % 7; // Montag = 0
+}
+
+// Nächster Termin einer Wiederholung: immer nach dem alten Termin und nach heute.
+export function naechsterTermin(todo, heute) {
+  if (!todo.wiederholung) return null;
+  const start = todo.faellig || heute;
+  const anker = todo.ankerTag || Number(start.slice(8, 10));
+  const schritt = {
+    taeglich: (d) => datumPlusTage(d, 1),
+    woechentlich: (d) => datumPlusTage(d, 7),
+    monatlich: (d) => tagImMonat(monatPlus(monatVon(d), 1), anker), // 31. bleibt 31., in kurzen Monaten der letzte Tag
+  }[todo.wiederholung];
+  let datum = start;
+  do datum = schritt(datum);
+  while (datum <= heute);
+  return datum;
+}
+
+// Abhaken: Wiederholtes springt auf den nächsten Termin (Unteraufgaben wieder offen), anderes wird erledigt/offen.
+export function todoAbhaken(todo, heute) {
+  if (!todo.erledigt && todo.wiederholung) {
+    return { ...todo, faellig: naechsterTermin(todo, heute), unteraufgaben: todo.unteraufgaben.map((u) => ({ ...u, erledigt: false })) };
+  }
+  return { ...todo, erledigt: !todo.erledigt };
+}
+
+export function verschiebeZiel(art, heute) {
+  if (art === "heute") return heute;
+  if (art === "morgen") return datumPlusTage(heute, 1);
+  if (art === "naechsteWoche") return datumPlusTage(heute, 7 - wochentag(heute)); // Montag der nächsten Woche
+  return "";
+}
+
+// Ansichten: offene To-dos; „Woche“ reicht bis Sonntag und zeigt Überfälliges mit.
+export function todosFiltern(todos, ansicht, heute) {
+  const offen = todos.filter((t) => !t.erledigt);
+  const sonntag = datumPlusTage(heute, 6 - wochentag(heute));
+  if (ansicht === "heute") return offen.filter((t) => t.faellig && t.faellig <= heute);
+  if (ansicht === "woche") return offen.filter((t) => t.faellig && t.faellig <= sonntag);
+  if (ansicht === "ueberfaellig") return offen.filter((t) => t.faellig && t.faellig < heute);
+  return offen;
+}
+
+// Wichtiges zuerst, dann nach Termin (ohne Termin ans Ende), sonst Reihenfolge des Anlegens.
+export function todosSortieren(todos) {
+  const termin = (t) => (t.faellig ? `${t.faellig} ${t.uhrzeit || "99:99"}` : "9999");
+  return [...todos].sort((a, b) => b.prioritaet - a.prioritaet || termin(a).localeCompare(termin(b)));
+}
+
+const ohneAkzente = (s) => s.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
+
+// Sucht in Text, Notiz, Projekt und Unteraufgaben; alle Wörter müssen vorkommen.
+export function todosSuchen(todos, suche) {
+  const woerter = ohneAkzente(suche).split(/\s+/).filter(Boolean);
+  if (!woerter.length) return todos;
+  return todos.filter((t) => {
+    const heuhaufen = ohneAkzente([t.text, t.notiz, t.projekt, ...t.unteraufgaben.map((u) => u.text)].join(" "));
+    return woerter.every((w) => heuhaufen.includes(w));
+  });
+}
+
+export function projektFortschritt(todos, projekt) {
+  const imProjekt = todos.filter((t) => t.projekt === projekt);
+  return { erledigt: imProjekt.filter((t) => t.erledigt).length, gesamt: imProjekt.length };
+}
+
+export function projektUmbenennen(todos, alt, neu) {
+  return todos.map((t) => (t.projekt === alt ? { ...t, projekt: neu.trim() } : t));
+}
+
 // ---------- Erinnerungen für Push-Nachrichten ----------
 
 // Ortszeit dieses Geräts als Date (für den Server wird daraus UTC).
@@ -165,7 +249,9 @@ export function erinnerungen(daten, jetzt, tage = 60) {
     neu(`s:${s.id}:${s.datum}:${s.beginn}`, vorher, "Schicht in 1 Stunde", `${s.beginn}–${s.ende}${s.notiz ? ` · ${s.notiz}` : ""}`);
   }
   for (const t of daten.todos) {
-    if (!t.erledigt && t.faellig) neu(`t:${t.id}:${t.faellig}`, ortszeit(t.faellig, "08:00"), "To-do fällig heute", t.projekt ? `${t.text} · ${t.projekt}` : t.text);
+    if (t.erledigt || !t.faellig) continue;
+    const uhrzeit = t.uhrzeit || "08:00";
+    neu(`t:${t.id}:${t.faellig}:${uhrzeit}`, ortszeit(t.faellig, uhrzeit), t.uhrzeit ? `To-do um ${t.uhrzeit}` : "To-do fällig heute", t.projekt ? `${t.text} · ${t.projekt}` : t.text);
   }
   for (let monat = monatVon(isoVon(jetzt)); monat <= monatVon(isoVon(bis)); monat = monatPlus(monat, 1)) {
     for (const a of daten.abos) {
@@ -213,7 +299,7 @@ export function leereDaten() {
 // Ergänzt fehlende Felder, z. B. nach einem Update der App.
 export function mitStandardwerten(roh) {
   const leer = leereDaten();
-  return { ...leer, ...roh, einstellungen: { ...leer.einstellungen, ...roh.einstellungen } };
+  return { ...leer, ...roh, einstellungen: { ...leer.einstellungen, ...roh.einstellungen }, todos: (roh.todos ?? []).map(todoMitStandard) };
 }
 
 const ganzeZahl = (n) => Number.isInteger(n);
@@ -233,7 +319,11 @@ export function pruefeDaten(d) {
   for (const s of d.schichten) pruefe(text(s.id) && istDatum(s.datum) && istZeit(s.beginn) && istZeit(s.ende) && ganzeZahl(s.pause) && ganzeZahl(s.lohn) && text(s.notiz), `Schicht am ${s.datum} ist ungültig.`);
   for (const a of d.abos) pruefe(text(a.id) && text(a.name) && ganzeZahl(a.betrag) && ganzeZahl(a.tag) && [1, 3, 6, 12].includes(a.rhythmus) && istMonat(a.abMonat) && (a.bisMonat === "" || istMonat(a.bisMonat)), `Abo „${a.name}“ ist ungültig.`);
   for (const a of d.ausgaben) pruefe(text(a.id) && text(a.name) && ganzeZahl(a.betrag) && istDatum(a.datum), `Ausgabe „${a.name}“ ist ungültig.`);
-  for (const t of d.todos) pruefe(text(t.id) && text(t.text) && text(t.projekt) && (t.faellig === "" || istDatum(t.faellig)) && typeof t.erledigt === "boolean", "Ein To-do ist ungültig.");
+  for (const t of d.todos) {
+    pruefe(text(t.id) && text(t.text) && text(t.projekt) && (t.faellig === "" || istDatum(t.faellig)) && typeof t.erledigt === "boolean", "Ein To-do ist ungültig.");
+    pruefe(text(t.notiz) && (t.uhrzeit === "" || istZeit(t.uhrzeit)) && [0, 1, 2].includes(t.prioritaet) && Object.hasOwn(WIEDERHOLUNGEN, t.wiederholung) && ganzeZahl(t.ankerTag) && t.ankerTag >= 0 && t.ankerTag <= 31, `To-do „${t.text}“ ist ungültig.`);
+    pruefe(Array.isArray(t.unteraufgaben) && t.unteraufgaben.every((u) => text(u.id) && text(u.text) && typeof u.erledigt === "boolean"), `Unteraufgaben von „${t.text}“ sind ungültig.`);
+  }
   pruefe(d.kontostand === null || (ganzeZahl(d.kontostand.betrag) && istDatum(d.kontostand.datum)), "Kontostand ist ungültig.");
 }
 
@@ -251,6 +341,7 @@ export function importiere(inhalt, { apiKey = "", apiKey2 = "", push = leereDate
   } catch {
     throw new Error("Die Datei ist kein gültiges JSON.");
   }
+  if (Array.isArray(d?.todos)) d.todos = d.todos.map(todoMitStandard); // Sicherungen von vor den neuen To-do-Feldern
   pruefeDaten(d);
   return { ...d, einstellungen: { ...d.einstellungen, apiKey, apiKey2, push } };
 }

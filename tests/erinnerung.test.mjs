@@ -39,7 +39,7 @@ test("Schicht: eine Stunde vorher, richtig über die Zeitumstellung, Vergangenes
 });
 
 test("To-do: 8:00 Uhr am Fälligkeitstag, nur offene mit Datum in der Zukunft", () => {
-  assert.deepEqual(nach(erinnerungen(beispiel(), jetzt), "t:"), [["t:t1:2026-10-22", "2026-10-22T06:00:00.000Z"]]);
+  assert.deepEqual(nach(erinnerungen(beispiel(), jetzt), "t:"), [["t:t1:2026-10-22:08:00", "2026-10-22T06:00:00.000Z"]]);
 });
 
 test("Abo: am Vortag 18:00, kurze Monate gekürzt, nichts nach dem Zeitfenster", () => {
@@ -56,7 +56,7 @@ test("Texte sind kurz und verständlich, Liste ist nach Zeit sortiert", () => {
   assert.deepEqual(zeiten, [...zeiten].sort());
   const finde = (id) => liste.find((e) => e.id === id);
   assert.deepEqual([finde("s:a:2026-10-24:09:00").titel, finde("s:a:2026-10-24:09:00").text], ["Schicht in 1 Stunde", "09:00–14:01 · Kasse"]);
-  assert.deepEqual([finde("t:t1:2026-10-22").titel, finde("t:t1:2026-10-22").text], ["To-do fällig heute", "Login reparieren · Trad tracker"]);
+  assert.deepEqual([finde("t:t1:2026-10-22:08:00").titel, finde("t:t1:2026-10-22:08:00").text], ["To-do fällig heute", "Login reparieren · Trad tracker"]);
   assert.equal(finde("a:n:2026-11-20").titel, "Abbuchung morgen");
   assert.match(finde("a:n:2026-11-20").text, /^Streaming · 9,99\s€$/);
 });
@@ -73,4 +73,11 @@ test("Verschobene Schicht bekommt eine neue id, damit der Server neu erinnert", 
 test("Kontrolle: die Tests laufen wirklich in deutscher Zeit", () => {
   assert.equal(new Date(2026, 9, 24, 8, 0).toISOString(), "2026-10-24T06:00:00.000Z");
   assert.equal(new Date(2026, 9, 26, 8, 0).toISOString(), "2026-10-26T07:00:00.000Z");
+});
+
+test("To-do mit Uhrzeit: Erinnerung genau dann, mit Uhrzeit im Titel", () => {
+  const d = beispiel();
+  d.todos[0].uhrzeit = "15:30";
+  const [e] = erinnerungen(d, jetzt).filter((x) => x.id.startsWith("t:"));
+  assert.deepEqual([e.id, e.zeit, e.titel], ["t:t1:2026-10-22:15:30", "2026-10-22T13:30:00.000Z", "To-do um 15:30"]);
 });
