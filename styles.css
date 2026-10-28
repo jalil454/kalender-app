@@ -1104,6 +1104,30 @@ input::-webkit-date-and-time-value {
   color: var(--text);
 }
 
+/* Schicht abhaken: drei Knöpfe unter jeder vergangenen Schicht */
+.abhaken-gruppe {
+  margin-bottom: var(--a5);
+}
+
+.abhaken + .abhaken {
+  border-top: 0.5px solid var(--linie);
+}
+
+.abhaken-knoepfe {
+  display: grid;
+  grid-template-columns: repeat(3, auto);
+  gap: var(--a2);
+  padding: 0 var(--a4) var(--a3);
+}
+
+.abhaken-knoepfe .knopf {
+  min-height: var(--ziel);
+  margin-top: 0;
+  padding: 0 var(--a2);
+  font-size: 0.9375rem;
+  text-align: center;
+}
+
 .kreis {
   display: inline-block;
   width: 28px;

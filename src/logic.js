@@ -63,7 +63,8 @@ const minuten = (zeit) => {
 
 // ---------- Arbeitszeit und Lohn ----------
 
-export function arbeitsMinuten({ beginn, ende, pause = 0 }) {
+export function arbeitsMinuten({ beginn, ende, pause = 0, status }) {
+  if (status === "nichtDa") return 0;
   let dauer = minuten(ende) - minuten(beginn);
   if (dauer <= 0) dauer += 24 * 60; // Ende liegt am nächsten Tag (Nachtschicht)
   return Math.max(0, dauer - pause);
@@ -79,12 +80,42 @@ export function monatsLohn(schichten, monat) {
   let lohn = 0;
   let anzahl = 0;
   for (const s of schichten) {
-    if (monatVon(s.datum) !== monat) continue;
+    if (monatVon(s.datum) !== monat || s.status === "nichtDa") continue;
     summeMinuten += arbeitsMinuten(s);
     lohn += schichtLohn(s);
     anzahl++;
   }
   return { minuten: summeMinuten, lohn, anzahl };
+}
+
+// ---------- Schicht abhaken ----------
+
+// geplant: noch nicht abgehakt · da: abgehakt · nichtDa: zählt 0 €
+export const SCHICHT_STATUS = ["geplant", "da", "nichtDa"];
+
+export function schichtEnde(s) {
+  const tag = s.ende <= s.beginn ? datumPlusTage(s.datum, 1) : s.datum; // Nachtschicht endet am nächsten Tag
+  return ortszeit(tag, s.ende);
+}
+
+// Eine Schicht, die beim Eintragen schon vorbei ist, wurde nachgetragen und gilt als da.
+export const neuerStatus = (s, jetzt) => (schichtEnde(s) <= jetzt ? "da" : "geplant");
+
+// Schichten von vor dem Abhaken haben keinen Status: vergangene gelten als da, kommende werden abgefragt.
+export const schichtMitStandard = (s, jetzt = new Date()) => ({ ...s, status: s.status ?? neuerStatus(s, jetzt) });
+
+export function zuBestaetigen(schichten, jetzt) {
+  return schichten
+    .filter((s) => s.status === "geplant" && schichtEnde(s) <= jetzt)
+    .sort((a, b) => `${a.datum} ${a.beginn}`.localeCompare(`${b.datum} ${b.beginn}`));
+}
+
+// Früher gegangen: neues Ende muss nach dem Beginn und vor dem geplanten Ende liegen. Sonst null.
+export function frueherRaus(s, gegangen) {
+  if (!istZeit(gegangen)) return null;
+  const abBeginn = (zeit) => (minuten(zeit) - minuten(s.beginn) + 24 * 60) % (24 * 60) || 24 * 60;
+  if (gegangen === s.beginn || abBeginn(gegangen) >= abBeginn(s.ende)) return null;
+  return { ...s, ende: gegangen, status: "da" };
 }
 
 export function zahltag(arbeitsMonat, einstellungen) {
@@ -126,6 +157,9 @@ export function buchungen(daten, von, bis) {
   }
   for (const a of daten.ausgaben) {
     if (imZeitraum(a.datum)) liste.push({ datum: a.datum, text: a.name, betrag: -a.betrag, art: "ausgabe" });
+  }
+  for (const e of daten.einnahmen) {
+    if (imZeitraum(e.datum)) liste.push({ datum: e.datum, text: e.name, betrag: e.betrag, art: "einnahme" });
   }
   return liste.sort((a, b) => a.datum.localeCompare(b.datum) || b.betrag - a.betrag);
 }
@@ -245,13 +279,18 @@ export function erinnerungen(daten, jetzt, tage = 60) {
     if (zeitpunkt > jetzt && zeitpunkt <= bis) liste.push({ id, zeit: zeitpunkt.toISOString(), titel, text: inhalt });
   };
   for (const s of daten.schichten) {
+    const zeiten = `${s.beginn}–${s.ende}`;
     const vorher = new Date(ortszeit(s.datum, s.beginn).getTime() - 60 * 6e4);
-    neu(`s:${s.id}:${s.datum}:${s.beginn}`, vorher, "Schicht in 1 Stunde", `${s.beginn}–${s.ende}${s.notiz ? ` · ${s.notiz}` : ""}`);
+    neu(`s:${s.id}:${s.datum}:${s.beginn}`, vorher, "Schicht in 1 Stunde", `${zeiten}${s.notiz ? ` · ${s.notiz}` : ""}`);
+    neu(`sa:${s.id}:${s.datum}:${s.beginn}`, ortszeit(datumPlusTage(s.datum, -1), "20:00"), "Morgen Schicht", `${zeiten}${s.notiz ? ` · ${s.notiz}` : ""}`);
+    if (s.status === "geplant") neu(`se:${s.id}:${s.datum}:${s.ende}`, schichtEnde(s), "Schicht vorbei – warst du da?", `${zeiten} · Tippe zum Abhaken`);
   }
   for (const t of daten.todos) {
     if (t.erledigt || !t.faellig) continue;
     const uhrzeit = t.uhrzeit || "08:00";
-    neu(`t:${t.id}:${t.faellig}:${uhrzeit}`, ortszeit(t.faellig, uhrzeit), t.uhrzeit ? `To-do um ${t.uhrzeit}` : "To-do fällig heute", t.projekt ? `${t.text} · ${t.projekt}` : t.text);
+    const inhalt = t.projekt ? `${t.text} · ${t.projekt}` : t.text;
+    neu(`t:${t.id}:${t.faellig}:${uhrzeit}`, ortszeit(t.faellig, uhrzeit), t.uhrzeit ? `To-do um ${t.uhrzeit}` : "To-do fällig heute", inhalt);
+    neu(`ta:${t.id}:${t.faellig}`, ortszeit(datumPlusTage(t.faellig, -1), "20:00"), t.uhrzeit ? `To-do morgen um ${t.uhrzeit}` : "To-do morgen", inhalt);
   }
   for (let monat = monatVon(isoVon(jetzt)); monat <= monatVon(isoVon(bis)); monat = monatPlus(monat, 1)) {
     for (const a of daten.abos) {
@@ -291,15 +330,16 @@ export function leereDaten() {
     schichten: [],
     abos: [],
     ausgaben: [],
+    einnahmen: [],
     kontostand: null,
     todos: [],
   };
 }
 
 // Ergänzt fehlende Felder, z. B. nach einem Update der App.
-export function mitStandardwerten(roh) {
+export function mitStandardwerten(roh, jetzt = new Date()) {
   const leer = leereDaten();
-  return { ...leer, ...roh, einstellungen: { ...leer.einstellungen, ...roh.einstellungen }, todos: (roh.todos ?? []).map(todoMitStandard) };
+  return { ...leer, ...roh, einstellungen: { ...leer.einstellungen, ...roh.einstellungen }, schichten: (roh.schichten ?? []).map((s) => schichtMitStandard(s, jetzt)), todos: (roh.todos ?? []).map(todoMitStandard) };
 }
 
 const ganzeZahl = (n) => Number.isInteger(n);
@@ -315,10 +355,11 @@ export function pruefeDaten(d) {
   const e = d.einstellungen;
   pruefe(e && ganzeZahl(e.stundenlohn) && ganzeZahl(e.standardPause) && ganzeZahl(e.zahltag) && typeof e.zahlungImFolgemonat === "boolean" && text(e.name) && Array.isArray(e.kuerzel), "Einstellungen sind ungültig.");
   for (const k of e.kuerzel) pruefe(text(k.code) && istZeit(k.beginn) && istZeit(k.ende) && ganzeZahl(k.pause), "Ein Schichtkürzel ist ungültig.");
-  for (const liste of ["schichten", "abos", "ausgaben", "todos"]) pruefe(Array.isArray(d[liste]), `Liste „${liste}“ fehlt.`);
-  for (const s of d.schichten) pruefe(text(s.id) && istDatum(s.datum) && istZeit(s.beginn) && istZeit(s.ende) && ganzeZahl(s.pause) && ganzeZahl(s.lohn) && text(s.notiz), `Schicht am ${s.datum} ist ungültig.`);
+  for (const liste of ["schichten", "abos", "ausgaben", "einnahmen", "todos"]) pruefe(Array.isArray(d[liste]), `Liste „${liste}“ fehlt.`);
+  for (const s of d.schichten) pruefe(text(s.id) && istDatum(s.datum) && istZeit(s.beginn) && istZeit(s.ende) && ganzeZahl(s.pause) && ganzeZahl(s.lohn) && text(s.notiz) && SCHICHT_STATUS.includes(s.status), `Schicht am ${s.datum} ist ungültig.`);
   for (const a of d.abos) pruefe(text(a.id) && text(a.name) && ganzeZahl(a.betrag) && ganzeZahl(a.tag) && [1, 3, 6, 12].includes(a.rhythmus) && istMonat(a.abMonat) && (a.bisMonat === "" || istMonat(a.bisMonat)), `Abo „${a.name}“ ist ungültig.`);
   for (const a of d.ausgaben) pruefe(text(a.id) && text(a.name) && ganzeZahl(a.betrag) && istDatum(a.datum), `Ausgabe „${a.name}“ ist ungültig.`);
+  for (const e of d.einnahmen) pruefe(text(e.id) && text(e.name) && ganzeZahl(e.betrag) && istDatum(e.datum), `Einnahme „${e.name}“ ist ungültig.`);
   for (const t of d.todos) {
     pruefe(text(t.id) && text(t.text) && text(t.projekt) && (t.faellig === "" || istDatum(t.faellig)) && typeof t.erledigt === "boolean", "Ein To-do ist ungültig.");
     pruefe(text(t.notiz) && (t.uhrzeit === "" || istZeit(t.uhrzeit)) && [0, 1, 2].includes(t.prioritaet) && Object.hasOwn(WIEDERHOLUNGEN, t.wiederholung) && ganzeZahl(t.ankerTag) && t.ankerTag >= 0 && t.ankerTag <= 31, `To-do „${t.text}“ ist ungültig.`);
@@ -334,7 +375,7 @@ export function exportiere(daten) {
 }
 
 // Beim Import bleiben Keys und Push-Anmeldung dieses Geräts erhalten.
-export function importiere(inhalt, { apiKey = "", apiKey2 = "", push = leereDaten().einstellungen.push } = {}) {
+export function importiere(inhalt, { apiKey = "", apiKey2 = "", push = leereDaten().einstellungen.push, jetzt = new Date() } = {}) {
   let d;
   try {
     d = JSON.parse(inhalt);
@@ -342,6 +383,8 @@ export function importiere(inhalt, { apiKey = "", apiKey2 = "", push = leereDate
     throw new Error("Die Datei ist kein gültiges JSON.");
   }
   if (Array.isArray(d?.todos)) d.todos = d.todos.map(todoMitStandard); // Sicherungen von vor den neuen To-do-Feldern
+  if (Array.isArray(d?.schichten)) d.schichten = d.schichten.map((s) => schichtMitStandard(s, jetzt)); // ... und von vor dem Abhaken
+  if (d && typeof d === "object" && d.einnahmen === undefined) d.einnahmen = []; // ... und von vor den Einnahmen
   pruefeDaten(d);
   return { ...d, einstellungen: { ...d.einstellungen, apiKey, apiKey2, push } };
 }

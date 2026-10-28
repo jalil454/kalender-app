@@ -6,7 +6,7 @@ import { exportiere, importiere, leereDaten, mitStandardwerten } from "../src/lo
 function beispiel() {
   const d = leereDaten();
   d.einstellungen = { ...d.einstellungen, stundenlohn: 1390, name: "Muster", kuerzel: [{ code: "F", beginn: "06:00", ende: "14:00", pause: 30 }], apiKey: "sk-ant-test-geheim", apiKey2: "sk-or-test-geheim" };
-  d.schichten = [{ id: "s1", datum: "2026-10-14", beginn: "08:00", ende: "16:30", pause: 30, lohn: 1390, notiz: "Kasse, Lager" }];
+  d.schichten = [{ id: "s1", datum: "2026-10-14", beginn: "08:00", ende: "16:30", pause: 30, lohn: 1390, notiz: "Kasse, Lager", status: "da" }];
   d.abos = [{ id: "a1", name: "Streaming", betrag: 999, tag: 20, rhythmus: 1, abMonat: "2026-01", bisMonat: "" }];
   d.ausgaben = [{ id: "e1", name: "Schuhe", betrag: 5995, datum: "2026-10-20" }];
   d.kontostand = { betrag: -1250, datum: "2026-10-14" };

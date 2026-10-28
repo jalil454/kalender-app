@@ -117,6 +117,7 @@ function ansichtKalender() {
   return `
     ${navbar(`<button class="text-knopf" data-aktion="heute">Heute</button>`, `<button class="icon-knopf" data-aktion="scan" aria-label="Dienstplan scannen">${ICON.scan}</button>${knopfEinstellungen()}`)}
     <div class="titelzeile"><h1>${L.monatsName(ui.monat)} <span class="zusatz">${jahr}</span></h1>${pfeile("monat", "Vorheriger Monat", "Nächster Monat")}</div>
+    ${abhakenKarte()}
     <div class="wochentage" aria-hidden="true">${WOCHENTAGE.map((w) => `<span>${w}</span>`).join("")}</div>
     <div class="raster">${zellen}</div>
     ${lohnFehlt}
@@ -126,12 +127,33 @@ function ansichtKalender() {
     ${tagesDetail()}`;
 }
 
+// Vergangene Schichten, bei denen du noch nicht abgehakt hast, ob du da warst.
+let angezeigtOffen = 0; // damit die Karte beim Zurückkommen in die App erscheint, sobald eine Schicht vorbei ist
+function abhakenKarte() {
+  const offen = L.zuBestaetigen(daten.schichten, new Date());
+  angezeigtOffen = offen.length;
+  if (!offen.length) return "";
+  const eintraege = offen
+    .map(
+      (s) => `<div class="abhaken">
+      <div class="zeile"><span class="haupt"><span class="titel" id="abhaken-${s.id}">${datumMittel(s.datum)} · ${s.beginn}–${s.ende}</span><span class="unter">Warst du da?</span></span><span class="wert">${L.formatGeld(L.schichtLohn(s))}</span></div>
+      <div class="abhaken-knoepfe">
+        <button class="knopf" data-aktion="schicht-da" data-id="${s.id}" aria-describedby="abhaken-${s.id}">Ja, ganz</button>
+        <button class="knopf zweit" data-aktion="schicht-frueher" data-id="${s.id}" aria-describedby="abhaken-${s.id}">Früher raus</button>
+        <button class="knopf zweit" data-aktion="schicht-nicht-da" data-id="${s.id}" aria-describedby="abhaken-${s.id}">Nicht da</button>
+      </div>
+    </div>`,
+    )
+    .join("");
+  return `<h2 class="gruppen-titel">Abhaken</h2><div class="gruppe abhaken-gruppe">${eintraege}</div>`;
+}
+
 function tagesDetail() {
   const schichten = daten.schichten.filter((s) => s.datum === ui.tag).sort((a, b) => a.beginn.localeCompare(b.beginn));
   const todos = daten.todos.filter((t) => t.faellig === ui.tag);
   const zeilen = schichten
     .map((s) => {
-      const details = [L.formatStunden(L.arbeitsMinuten(s)), s.pause && `${s.pause} min Pause`, s.notiz && esc(s.notiz)].filter(Boolean).join(" · ");
+      const details = s.status === "nichtDa" ? "Nicht da" : [L.formatStunden(L.arbeitsMinuten(s)), s.pause && `${s.pause} min Pause`, s.notiz && esc(s.notiz)].filter(Boolean).join(" · ");
       return `<button class="zeile" data-aktion="schicht-bearbeiten" data-id="${s.id}"><span class="haupt"><span class="titel">${s.beginn}–${s.ende}</span><span class="unter">${details}</span></span><span class="wert">${L.formatGeld(L.schichtLohn(s))}</span></button>`;
     })
     .join("");
@@ -188,6 +210,12 @@ function ansichtGeld() {
     .map((a) => `<button class="zeile" data-aktion="ausgabe-bearbeiten" data-id="${a.id}"><span class="haupt"><span class="titel">${esc(a.name)}</span><span class="unter">${datumMittel(a.datum)}</span></span><span class="wert">${L.formatGeld(a.betrag)}</span></button>`)
     .join("");
 
+  const einnahmen = daten.einnahmen
+    .filter((e) => L.monatVon(e.datum) === monat)
+    .sort((a, b) => a.datum.localeCompare(b.datum))
+    .map((e) => `<button class="zeile" data-aktion="einnahme-bearbeiten" data-id="${e.id}"><span class="haupt"><span class="titel">${esc(e.name)}</span><span class="unter">${datumMittel(e.datum)}</span></span><span class="wert stark">${mitVorzeichen(e.betrag)}</span></button>`)
+    .join("");
+
   return `
     ${navbar("", knopfEinstellungen())}
     <div class="titelzeile"><h1>Geld</h1>${pfeile("geldmonat", "Vorheriger Monat", "Nächster Monat")}</div>
@@ -199,6 +227,11 @@ function ansichtGeld() {
       ${abos}
       ${daten.abos.length ? `<div class="zeile"><span class="haupt">Im Schnitt pro Monat</span><span class="wert stark">${L.formatGeld(Math.round(L.aboProMonat(aktiv)))}</span></div>` : ""}
       ${neuZeile("abo-neu", "Abo hinzufügen")}
+    </div>
+    <h2 class="gruppen-titel">Einnahmen im ${name}</h2>
+    <div class="gruppe">
+      ${einnahmen}
+      ${neuZeile("einnahme-neu", "Einnahme hinzufügen")}
     </div>
     <h2 class="gruppen-titel">Einmalige Ausgaben im ${name}</h2>
     <div class="gruppe">
@@ -421,6 +454,15 @@ function sheetSchicht(s) {
       ${feld("Stundenlohn", `<input name="lohn" inputmode="decimal" required placeholder="0,00" value="${w.lohn ? L.centZuEingabe(w.lohn) : ""}">`, "€")}
     </div>
     <p class="vorschau" data-vorschau aria-live="polite"></p>
+    ${
+      s && L.schichtEnde(s) <= new Date()
+        ? `<h2 class="gruppen-titel" id="da-name">Warst du da?</h2>
+    <div class="segment" role="radiogroup" aria-labelledby="da-name">
+      <label><input type="radio" name="da" value="da"${s.status === "nichtDa" ? "" : " checked"}>Ja</label>
+      <label><input type="radio" name="da" value="nichtDa"${s.status === "nichtDa" ? " checked" : ""}>Nein</label>
+    </div>`
+        : ""
+    }
     <div class="gruppe">${feld("Notiz", `<input name="notiz" maxlength="200" placeholder="optional" value="${esc(w.notiz)}">`, "", true)}</div>
     ${s ? loeschKnopf("schicht-loeschen", s.id, "Schicht löschen") : ""}`,
     { form: "schicht", id: s?.id },
@@ -432,12 +474,29 @@ function vorschauSchicht() {
   const f = $sheet.querySelector('[data-form="schicht"]');
   const ausgabe = f?.querySelector("[data-vorschau]");
   if (!ausgabe) return;
-  const s = { beginn: f.elements.beginn.value, ende: f.elements.ende.value, pause: Number(f.elements.pause.value), lohn: L.euroZuCent(f.elements.lohn.value) };
+  const s = { beginn: f.elements.beginn.value, ende: f.elements.ende.value, pause: Number(f.elements.pause.value), lohn: L.euroZuCent(f.elements.lohn.value), status: f.elements.da?.value };
   if (!L.istZeit(s.beginn) || !L.istZeit(s.ende) || s.beginn === s.ende || !Number.isInteger(s.pause) || s.lohn === null) {
     ausgabe.textContent = "";
     return;
   }
   ausgabe.textContent = `${L.formatStunden(L.arbeitsMinuten(s))} · ${L.formatGeld(L.schichtLohn(s))}${s.ende < s.beginn ? " · endet am nächsten Tag" : ""}`;
+}
+
+function sheetFrueher(s) {
+  oeffneSheet(
+    "Früher raus",
+    `<div class="gruppe">${feld("Gegangen um", `<input type="time" name="gegangen" required value="">`)}</div>
+    <p class="vorschau" data-vorschau aria-live="polite"></p>
+    <p class="fussnote">Geplant: ${datumMittel(s.datum)}, ${s.beginn}–${s.ende}. Die Pause bleibt ${s.pause} min, ändern kannst du sie später in der Schicht.</p>`,
+    { form: "frueher", id: s.id },
+  );
+}
+
+function vorschauFrueher() {
+  const f = $sheet.querySelector('[data-form="frueher"]');
+  const s = finde(daten.schichten, f.dataset.id);
+  const neu = L.frueherRaus(s, f.elements.gegangen.value);
+  f.querySelector("[data-vorschau]").textContent = neu ? `${L.formatStunden(L.arbeitsMinuten(neu))} · ${L.formatGeld(L.schichtLohn(neu))} statt ${L.formatGeld(L.schichtLohn(s))}` : "";
 }
 
 function sheetAbo(a) {
@@ -472,6 +531,20 @@ function sheetAusgabe(a) {
     </div>
     ${a ? loeschKnopf("ausgabe-loeschen", a.id, "Ausgabe löschen") : ""}`,
     { form: "ausgabe", id: a?.id },
+  );
+}
+
+function sheetEinnahme(e) {
+  const w = e ?? { name: "", betrag: 0, datum: ui.geldMonat === L.monatVon(heute) ? heute : `${ui.geldMonat}-01` };
+  oeffneSheet(
+    e ? "Einnahme" : "Neue Einnahme",
+    `<div class="gruppe">
+      ${feld("Name", `<input name="name" required maxlength="80" placeholder="z. B. Flohmarkt" value="${esc(w.name)}">`, "", true)}
+      ${feld("Betrag", `<input name="betrag" inputmode="decimal" required placeholder="0,00" value="${w.betrag ? L.centZuEingabe(w.betrag) : ""}">`, "€")}
+      ${feld("Datum", `<input type="date" name="datum" required value="${w.datum}">`)}
+    </div>
+    ${e ? loeschKnopf("einnahme-loeschen", e.id, "Einnahme löschen") : ""}`,
+    { form: "einnahme", id: e?.id },
   );
 }
 
@@ -566,6 +639,7 @@ const SPEICHERN = {
     if (lohn === null || lohn < 0) return ungueltig(f.elements.lohn, "Bitte als Betrag eingeben, z. B. 13,90");
     if (w.beginn === w.ende) return ungueltig(f.elements.ende, "Ende und Beginn sind gleich.");
     const s = { id: id || neueId(), datum: w.datum, beginn: w.beginn, ende: w.ende, pause: Number(w.pause), lohn, notiz: w.notiz.trim() };
+    s.status = L.schichtEnde(s) > new Date() ? "geplant" : w.da || "da"; // nachgetragene Schichten gelten als da
     ersetzeOderNeu(daten.schichten, s);
     ui.tag = s.datum;
     ui.monat = L.monatVon(s.datum);
@@ -581,6 +655,18 @@ const SPEICHERN = {
     const betrag = L.euroZuCent(w.betrag);
     if (betrag === null || betrag <= 0) return ungueltig(f.elements.betrag, "Bitte als Betrag eingeben, z. B. 25,00");
     ersetzeOderNeu(daten.ausgaben, { id: id || neueId(), name: w.name.trim(), betrag, datum: w.datum });
+  },
+  frueher(w, id, f) {
+    const alt = finde(daten.schichten, id);
+    const neu = L.frueherRaus(alt, w.gegangen);
+    if (!neu) return ungueltig(f.elements.gegangen, `Bitte eine Uhrzeit nach ${alt.beginn} und vor ${alt.ende}.`);
+    ersetzeOderNeu(daten.schichten, neu);
+    zeigeHinweis(`Abgehakt: bis ${neu.ende}`);
+  },
+  einnahme(w, id, f) {
+    const betrag = L.euroZuCent(w.betrag);
+    if (betrag === null || betrag <= 0) return ungueltig(f.elements.betrag, "Bitte als Betrag eingeben, z. B. 40,00");
+    ersetzeOderNeu(daten.einnahmen, { id: id || neueId(), name: w.name.trim(), betrag, datum: w.datum });
   },
   kontostand(w, id, f) {
     const betrag = L.euroZuCent(w.betrag);
@@ -825,7 +911,8 @@ function scanUebernehmen(f) {
     if (!L.istZeit(beginn)) return ungueltig(el[`beginn-${i}`], "Bitte Beginn eintragen.");
     if (!L.istZeit(ende) || ende === beginn) return ungueltig(el[`ende-${i}`], "Bitte ein Ende eintragen, das sich vom Beginn unterscheidet.");
     if (!Number.isInteger(pause) || pause < 0) return ungueltig(el[`pause-${i}`], "Bitte Pause in Minuten.");
-    neu.push({ id: neueId(), datum: e.datum, beginn, ende, pause, lohn: daten.einstellungen.stundenlohn, notiz: "" });
+    const s = { id: neueId(), datum: e.datum, beginn, ende, pause, lohn: daten.einstellungen.stundenlohn, notiz: "" };
+    neu.push({ ...s, status: L.neuerStatus(s, new Date()) });
   }
   daten.schichten.push(...neu);
   ui.tab = "kalender";
@@ -915,12 +1002,26 @@ const AKTIONEN = {
   "schicht-neu": () => sheetSchicht(),
   "schicht-bearbeiten": (el) => sheetSchicht(finde(daten.schichten, el.dataset.id)),
   "schicht-loeschen": (el) => loeschen("schichten", el.dataset.id, "Diese Schicht löschen?"),
+  "schicht-da"(el) {
+    finde(daten.schichten, el.dataset.id).status = "da";
+    zeigeHinweis("Abgehakt");
+    sichern();
+  },
+  "schicht-frueher": (el) => sheetFrueher(finde(daten.schichten, el.dataset.id)),
+  "schicht-nicht-da"(el) {
+    finde(daten.schichten, el.dataset.id).status = "nichtDa";
+    zeigeHinweis("Als nicht da eingetragen, zählt 0 €");
+    sichern();
+  },
   "abo-neu": () => sheetAbo(),
   "abo-bearbeiten": (el) => sheetAbo(finde(daten.abos, el.dataset.id)),
   "abo-loeschen": (el) => loeschen("abos", el.dataset.id, "Dieses Abo löschen?"),
   "ausgabe-neu": () => sheetAusgabe(),
   "ausgabe-bearbeiten": (el) => sheetAusgabe(finde(daten.ausgaben, el.dataset.id)),
   "ausgabe-loeschen": (el) => loeschen("ausgaben", el.dataset.id, "Diese Ausgabe löschen?"),
+  "einnahme-neu": () => sheetEinnahme(),
+  "einnahme-bearbeiten": (el) => sheetEinnahme(finde(daten.einnahmen, el.dataset.id)),
+  "einnahme-loeschen": (el) => loeschen("einnahmen", el.dataset.id, "Diese Einnahme löschen?"),
   kontostand: () => sheetKontostand(),
   "todo-neu": () => sheetTodo(),
   "todo-bearbeiten": (el) => sheetTodo(finde(daten.todos, el.dataset.id)),
@@ -1002,7 +1103,7 @@ const AKTIONEN = {
   export: () => teilenOderLaden(`kalender-sicherung-${heute}.json`, L.exportiere(daten), "application/json"),
   ics: () => teilenOderLaden(`schichten-${heute}.ics`, L.icsExport(daten.schichten), "text/calendar"),
   "alles-loeschen"() {
-    if (!confirm("Alle Schichten, Abos, Ausgaben, To-dos und Einstellungen werden gelöscht. Das lässt sich nicht rückgängig machen.")) return;
+    if (!confirm("Alle Schichten, Abos, Einnahmen, Ausgaben, To-dos und Einstellungen werden gelöscht. Das lässt sich nicht rückgängig machen.")) return;
     if (daten.einstellungen.push.aktiv) ausschalten(daten).catch(() => {}); // sonst kämen weiter Erinnerungen
     daten = L.leereDaten();
     sichern();
@@ -1081,6 +1182,7 @@ document.addEventListener("change", (ereignis) => {
 $sheet.addEventListener("input", (ereignis) => {
   const f = ereignis.target.form;
   if (f?.dataset.form === "schicht") vorschauSchicht();
+  if (f?.dataset.form === "frueher") vorschauFrueher();
   if (f?.dataset.form === "scan-uebernehmen") zaehleAuswahl(f);
 });
 
@@ -1116,10 +1218,19 @@ document.addEventListener("visibilitychange", () => {
   if (document.hidden) return;
   abgleichPlanen(); // Zeitfenster der Erinnerungen nach vorne schieben
   const neu = L.isoVon(new Date());
-  if (neu !== heute) {
+  if (neu !== heute || L.zuBestaetigen(daten.schichten, new Date()).length !== angezeigtOffen) {
     heute = neu;
     render();
   }
+});
+
+// Tippen auf „Schicht vorbei“ bei offener App: zum Kalender mit der Abhaken-Karte.
+navigator.serviceWorker?.addEventListener("message", (ereignis) => {
+  if (ereignis.data?.ziel !== "kalender") return;
+  ui.tab = "kalender";
+  ui.einstellungen = false;
+  render();
+  scrollTo(0, 0);
 });
 
 let hinweisTimer;

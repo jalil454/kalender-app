@@ -81,3 +81,38 @@ test("To-do mit Uhrzeit: Erinnerung genau dann, mit Uhrzeit im Titel", () => {
   const [e] = erinnerungen(d, jetzt).filter((x) => x.id.startsWith("t:"));
   assert.deepEqual([e.id, e.zeit, e.titel], ["t:t1:2026-10-22:15:30", "2026-10-22T13:30:00.000Z", "To-do um 15:30"]);
 });
+
+test("Schicht am Vorabend um 20:00, auch über die Zeitumstellung und bei Beginn nach Mitternacht", () => {
+  assert.deepEqual(nach(erinnerungen(beispiel(), jetzt), "sa:"), [
+    ["sa:d:2026-10-21:00:30", "2026-10-20T18:00:00.000Z"], // 20:00 Sommerzeit, eine Stunde vor ist dann 23:30
+    ["sa:a:2026-10-24:09:00", "2026-10-23T18:00:00.000Z"], // 20:00 Sommerzeit
+    ["sa:b:2026-10-26:09:00", "2026-10-25T19:00:00.000Z"], // 20:00 Winterzeit
+  ]);
+  const e = erinnerungen(beispiel(), jetzt).find((x) => x.id === "sa:a:2026-10-24:09:00");
+  assert.deepEqual([e.titel, e.text], ["Morgen Schicht", "09:00–14:01 · Kasse"]);
+});
+
+test("Nach dem geplanten Ende: Frage „warst du da?“, nur für noch nicht abgehakte Schichten", () => {
+  const d = beispiel();
+  d.schichten[0].status = "geplant"; // a: endet 24.10. 14:01
+  d.schichten[1].status = "da"; // b: schon abgehakt, keine Frage
+  d.schichten[2].status = "geplant"; // c: endet heute 16:00
+  d.schichten.push({ ...schicht("e", "2026-10-24", "22:00", "06:00"), status: "geplant" }); // endet nach der Umstellung
+  assert.deepEqual(nach(erinnerungen(d, jetzt), "se:"), [
+    ["se:c:2026-10-20:16:00", "2026-10-20T14:00:00.000Z"],
+    ["se:a:2026-10-24:14:01", "2026-10-24T12:01:00.000Z"],
+    ["se:e:2026-10-24:06:00", "2026-10-25T05:00:00.000Z"], // 06:00 Winterzeit am nächsten Morgen
+  ]);
+  const e = erinnerungen(d, jetzt).find((x) => x.id === "se:a:2026-10-24:14:01");
+  assert.deepEqual([e.titel, e.text], ["Schicht vorbei – warst du da?", "09:00–14:01 · Tippe zum Abhaken"]);
+});
+
+test("To-do zusätzlich am Vorabend um 20:00, mit Uhrzeit im Titel, wenn eine eingetragen ist", () => {
+  const d = beispiel();
+  assert.deepEqual(nach(erinnerungen(d, jetzt), "ta:"), [["ta:t1:2026-10-22", "2026-10-21T18:00:00.000Z"]]);
+  const ohne = erinnerungen(d, jetzt).find((x) => x.id.startsWith("ta:"));
+  assert.deepEqual([ohne.titel, ohne.text], ["To-do morgen", "Login reparieren · Trad tracker"]);
+  d.todos[0].uhrzeit = "15:30";
+  assert.equal(erinnerungen(d, jetzt).find((x) => x.id.startsWith("ta:")).titel, "To-do morgen um 15:30");
+  assert.equal(nach(erinnerungen(d, jetzt), "t:").length, 1); // die Erinnerung am Tag selbst bleibt
+});

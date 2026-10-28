@@ -59,10 +59,16 @@ self.addEventListener("push", (ereignis) => {
   ereignis.waitUntil(self.registration.showNotification(daten.titel ?? "Kalender", { body: daten.text ?? "", icon: "icons/icon-192.png", badge: "icons/icon-192.png" }));
 });
 
-// Tippen auf die Nachricht öffnet die App.
+// Tippen auf die Nachricht öffnet die App. Bei „Schicht vorbei“ zeigt sie den Kalender mit der Abhaken-Karte
+// (eine neu geöffnete App startet ohnehin im Kalender).
 self.addEventListener("notificationclick", (ereignis) => {
   ereignis.notification.close();
+  const abhaken = ereignis.notification.title.startsWith("Schicht vorbei");
   ereignis.waitUntil(
-    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((fenster) => (fenster[0] ? fenster[0].focus() : self.clients.openWindow("./"))),
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((fenster) => {
+      if (!fenster[0]) return self.clients.openWindow("./");
+      if (abhaken) fenster[0].postMessage({ ziel: "kalender" });
+      return fenster[0].focus();
+    }),
   );
 });
